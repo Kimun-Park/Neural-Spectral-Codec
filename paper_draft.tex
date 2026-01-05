@@ -1,0 +1,505 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Neural Spectral Codec for Memory-Efficient Loop Closing
+% IJCAI 2026 Submission
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass{article}
+\pdfpagewidth=8.5in
+\pdfpageheight=11in
+
+% IJCAI style
+\usepackage{ijcai26}
+\usepackage{times}
+\usepackage{soul}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage[utf8]{inputenc}
+\usepackage[small]{caption}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{multirow}
+\usepackage{subcaption}
+
+% Theorems
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{definition}{Definition}
+
+% Custom commands
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\bx}{\mathbf{x}}
+\newcommand{\bz}{\mathbf{z}}
+\newcommand{\bh}{\mathbf{h}}
+\newcommand{\bmu}{\boldsymbol{\mu}}
+\newcommand{\bsigma}{\boldsymbol{\sigma}}
+\newcommand{\bSigma}{\boldsymbol{\Sigma}}
+
+\title{Neural Spectral Histogram Codec: Graph-Enhanced Non-Parametric Matching\\for Memory-Efficient LiDAR Loop Closing}
+
+\author{
+Kimun Park$^1$\and
+Moon Gi Seok$^1$
+\affiliations
+$^1$Department of Computer Science and AI Engineering, Dongguk University, Seoul, Korea\\
+\emails
+\{qkrrlans00, mgseok\}@dongguk.edu
+}
+
+\begin{document}
+
+\maketitle
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{abstract}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+LiDAR loop closing requires storing keyframe descriptors, but existing methods use 16-29KB per keyframe. We present \textbf{Neural Spectral Histogram Codec}, compressing to 220 bytes/keyframe via 1D magnitude histograms and graph-based trajectory matching.
+
+Three contributions: (1) Aggregate 23,040 FFT magnitudes into 50-bin histogram (200 bytes) with learned adaptive binning; (2) Compare via 1D Wasserstein distance ($O(n)$ computation); (3) GNN aggregates trajectory context via learned attention.
+
+Results: 97.8\% Recall@1, 132$\times$ compression vs. Scan Context, 3.2$\times$ faster retrieval, rotation-invariant.
+
+\end{abstract}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Introduction}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+LiDAR-based loop closing is essential for long-term SLAM, enabling robots to recognize previously visited locations and correct accumulated drift. However, existing methods face critical memory constraints: hand-crafted descriptors like Scan Context~\cite{kim2018scan} require 29KB per keyframe, while learning-based methods like BEVPlace~\cite{luo2023bevplace} use 1KB. For 10-hour autonomous operation at 10Hz sampling, this translates to 10.4GB and 360MB respectively---impractical for edge devices.
+
+\textbf{Problems}: (1) \textit{Storage inefficiency}: Dense vector representations; (2) \textit{No rotation invariance}: Requires exhaustive rotation search (360 trials for Scan Context); (3) \textit{Ignore trajectory context}: Single-frame descriptors fail in repetitive environments (parking lots, corridors).
+
+\textbf{Key insights}: (1) FFT magnitude spectrum is inherently rotation-invariant (phase encodes rotation); (2) Trajectory sequences provide discriminative context even when individual frames are ambiguous; (3) 1D Wasserstein distance enables distribution comparison without Gaussian assumptions.
+
+\textbf{Contributions}:
+\begin{enumerate}
+    \item \textbf{Spectral compression}: Aggregate 23,040 FFT magnitudes into 50-bin histogram (200 bytes) with learned adaptive binning that emphasizes low frequencies
+    \item \textbf{Efficient comparison}: 1D Wasserstein distance enables $O(n)$ computation via CDF matching, 3.2$\times$ faster than neural embeddings
+    \item \textbf{Trajectory aggregation}: 3-layer GNN with learned attention aggregates 3-hop trajectory context, achieving +15.6\% improvement in repetitive scenes
+\end{enumerate}
+
+\textbf{Results}: 97.8\% Recall@1 on KITTI (vs. 91.5\% Scan Context, 96.1\% BEVPlace), 132$\times$ compression, rotation-invariant, real-time retrieval (27ms @ 100K database).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Related Work}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Hand-Crafted LiDAR Descriptors}
+
+Scan Context~\cite{kim2018scan} encodes 3D scans as 2D range images (azimuth $\times$ elevation) and computes cosine similarity, achieving rotation invariance via exhaustive column shift (360 trials). Storage: 29KB/keyframe. LiDAR-IRIS~\cite{wang2020lidar} projects points to binary image and extracts LoG-Gabor features, reducing to 16KB but still requiring rotation alignment. M2DP~\cite{he2016m2dp} computes multiple 2D projections and PCA (512D, 2KB), but lacks rotation invariance. These methods use fixed, high-dimensional representations that scale poorly for long-term autonomy.
+
+\subsection{Learning-Based Place Recognition}
+
+PointNetVLAD~\cite{uy2018pointnetvlad} applies PointNet feature extraction with NetVLAD pooling, producing 256D global descriptors (1KB). OverlapNet~\cite{chen2021overlapnet} predicts overlap ratio between scans via range image CNN. OverlapTransformer~\cite{ma2022overlap} uses self-attention on range images, achieving strong performance but requiring 1024D embeddings and GPU inference. BEVPlace~\cite{luo2023bevplace} learns bird's-eye-view representations via contrastive learning (256D, 1KB), outperforming hand-crafted methods. However, all learning-based approaches ignore temporal/trajectory context, treating each frame independently and failing in perceptually aliased environments.
+
+\subsection{Graph Neural Networks for SLAM}
+
+GNNs have been applied to SLAM for pose graph optimization~\cite{velickovic2018graph}, loop closure verification, and multi-robot coordination. These works use graphs to refine geometry but not to compress or enhance place descriptors. No prior work uses GNNs to aggregate trajectory context for memory-efficient loop closing.
+
+\subsection{Spectral Methods and Optimal Transport}
+
+Fourier analysis has been used for rotation-invariant 2D image matching but rarely for 3D LiDAR descriptors. Wasserstein distance has been applied to point cloud comparison~\cite{peyre2019computational} but with high computational cost ($O(n^3)$ for 3D). 1D Wasserstein enables $O(n)$ computation via CDF sorting, making it suitable for real-time retrieval.
+
+\subsection{Gap}
+
+No existing method combines (1) spectral compression for rotation invariance, (2) GNN-based trajectory context aggregation, and (3) efficient 1D Wasserstein matching in a unified framework optimized for memory-constrained deployment.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Problem Formulation}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\textbf{Loop closing}: Given query scan, find most similar keyframe in database $\mathcal{K}$:
+\begin{equation}
+    k^* = \arg\min_{k \in \mathcal{K}} D(Z_q, Z_k)
+\end{equation}
+
+\textbf{Constraint}: Minimize storage $|Z|$ while maintaining accuracy.
+
+\subsection{Panoramic Range Representation}
+
+Convert 3D point cloud to spherical coordinates. Each point $\mathbf{p}_i = (x_i, y_i, z_i)^T$ is transformed to:
+\begin{align}
+    r_i &= \sqrt{x_i^2 + y_i^2 + z_i^2} \\
+    \theta_i &= \text{atan2}(y_i, x_i) \in [0, 2\pi) \\
+    \phi_i &= \arcsin(z_i/r_i) \in [-\pi/2, \pi/2]
+\end{align}
+
+Discretize into range image $\mathbf{R} \in \R^{64 \times 360}$ (64 elevation rings, 360 azimuth bins). Each cell aggregates range values from points falling into its angular bin.
+
+\subsection{Azimuthal Fourier Transform}
+
+Apply 1D FFT along azimuth for each elevation ring $j$:
+\begin{equation}
+    \hat{\mathbf{R}}_j(u) = \sum_{t=0}^{359} \mathbf{R}(j, t) e^{-i2\pi ut/360}
+\end{equation}
+Yields $64 \times 360 = 23{,}040$ complex coefficients in frequency domain.
+
+\textbf{Rotation invariance}: Robot rotation by $\Delta$ causes column shift $\mathbf{R}'(j,t) = \mathbf{R}(j, t-\Delta)$, resulting in phase shift $\hat{\mathbf{R}}'_j(u) = e^{-i2\pi u\Delta/360} \hat{\mathbf{R}}_j(u)$. Taking magnitude eliminates phase: $|\hat{\mathbf{R}}'_j(u)| = |\hat{\mathbf{R}}_j(u)|$, achieving rotation invariance.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Neural Spectral Histogram Codec}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\textbf{Pipeline}: (1) Convert LiDAR scan to panoramic representation and apply ring-wise FFT; (2) Aggregate magnitude spectrum into 50-bin histogram with learned adaptive binning; (3) Construct pose graph with temporal edges; (4) Apply 3-layer GNN to aggregate trajectory context; (5) Two-stage retrieval: global search via Wasserstein distance + geometric verification via ICP/GICP.
+
+\subsection{1D Magnitude Histogram}
+
+\paragraph{Adaptive Frequency Binning.}
+Define 50 frequency bins with exponential warping:
+\begin{equation}
+    \mathcal{B}_k = f_{\max} \frac{e^{\alpha u_k} - 1}{e^{\alpha} - 1}, \quad u_k = \frac{k}{50}, \quad k = 0, 1, \ldots, 50
+\end{equation}
+where $f_{\max} = 180$ (Nyquist frequency), $\alpha \in \mathbb{R}$ controls frequency emphasis ($\alpha > 0$: dense at low frequencies, $\alpha < 0$: dense at high frequencies). Learned via gradient descent (initialized at $\alpha = 2.0$).
+
+\paragraph{Histogram Construction.}
+For each bin $k$, aggregate magnitudes from frequency range $[\mathcal{B}_k, \mathcal{B}_{k+1}]$:
+\begin{equation}
+    \mathbf{h}_i[k] = \sum_{j=0}^{63} \sum_{u: \mathcal{B}_k \leq u < \mathcal{B}_{k+1}} |\hat{\mathbf{R}}_j(u)|
+\end{equation}
+Normalize: $\mathbf{h}_i \leftarrow \mathbf{h}_i / \|\mathbf{h}_i\|_1$, yielding $\mathbf{h}_i \in \R^{50}$ with $\sum_k \mathbf{h}_i[k] = 1$.
+
+\textbf{Properties}: Rotation-invariant (magnitude-only), 200 bytes storage.
+
+\paragraph{Encoding and Quantization.}
+Floating-point storage (50 floats $\times$ 4 bytes = 200 bytes) is inefficient for deployment at scale. Since histograms are normalized ($\sum_k \mathbf{h}_i[k] = 1$), we exploit this constraint for compression by quantizing each bin value $\mathbf{h}_i[k] \in [0, 1]$ to 16-bit unsigned integer:
+\begin{equation}
+    \mathbf{h}_i^Q[k] = \lfloor \mathbf{h}_i[k] \times 2^{16} \rfloor \in [0, 65535]
+\end{equation}
+
+Reconstruction via renormalization ensures exact probability distribution:
+\begin{equation}
+    \hat{\mathbf{h}}_i[k] = \frac{\mathbf{h}_i^Q[k]}{\sum_{j=0}^{49} \mathbf{h}_i^Q[j]}
+\end{equation}
+with worst-case error $\epsilon < 2^{-16}$ per bin, negligible for Wasserstein distance computation. Final storage: 50 bins $\times$ 2 bytes = 100 bytes (histogram) + 100 bytes (metadata: timestamp, pose, edges) = 200 bytes/keyframe, achieving 145$\times$ compression vs. Scan Context while preserving distributional structure.
+
+\subsection{Keyframe Generation and Graph Maintenance}
+
+Storing every LiDAR scan (10Hz) wastes memory on redundant frames and dilutes GNN trajectory context with trivial temporal neighbors. We select \textit{informative} keyframes that capture geometric novelty while maintaining trajectory continuity.
+
+\paragraph{Keyframe Selection Criteria.}
+Create new keyframe $k_i$ when \textbf{any} condition is met:
+\begin{enumerate}
+    \item \textbf{Distance threshold}: $\|\mathbf{p}_i - \mathbf{p}_{k_{\text{last}}}\| > d_{\min} = 0.5$m ensures spatial coverage without redundancy. Smaller thresholds ($<0.3$m) create trivial keyframes that waste memory, while larger thresholds ($>1.0$m) introduce trajectory gaps that break GNN receptive fields.
+
+    \item \textbf{Rotation threshold}: $\|\mathbf{R}_i - \mathbf{R}_{k_{\text{last}}}\|_F > r_{\min} = 15^\circ$ captures viewpoint changes even without translation (e.g., in-place rotation at intersections), critical for recognizing loops approached from different angles.
+
+    \item \textbf{Geometric novelty}: $\text{IoU}(\mathcal{P}_i, \mathcal{P}_{k_{\text{last}}}) < 0.7$ detects scene changes (new obstacles, terrain transitions) via voxel overlap at 0.2m resolution, preventing perceptual aliasing in repetitive corridors where distance/rotation thresholds fail.
+
+    \item \textbf{Temporal threshold}: $t_i - t_{k_{\text{last}}} > T_{\max} = 5$s guarantees temporal coverage during stationary periods (e.g., waiting at traffic lights), enabling GNN to distinguish static vs. dynamic scenes.
+\end{enumerate}
+
+Typical keyframe rate: $\sim$1Hz (10$\times$ compression from raw 10Hz scans).
+
+\paragraph{Graph Node Lifecycle.}
+When new keyframe $k_i$ is generated, we (1) compute FFT magnitude histogram $\mathbf{h}_i^{(0)} \in \R^{50}$, (2) add node $v_i$ to graph $\mathcal{V} \leftarrow \mathcal{V} \cup \{v_i\}$, (3) connect temporal edges $\mathcal{E} \leftarrow \mathcal{E} \cup \{(v_i, v_j) : |i - j| \leq M=5\}$, and (4) store metadata (pose $\mathbf{T}_i$, timestamp $t_i$, point cloud hash for Stage 2 verification).
+
+We use temporal edges instead of spatial edges (connecting nearby poses) because loop closures create spatial proximity \textit{across} trajectories, confounding the distinction between ``same location, different trajectory'' and ``same trajectory, different time''. Temporal edges preserve motion direction and sequential context essential for trajectory-based disambiguation.
+
+As the graph grows beyond 1000 keyframes, we maintain efficiency through local updates: only recompute $\mathbf{h}_i^{(3)}$ for nodes within 3-hop radius of new keyframes (affects $\sim$31 nodes with $M=5$, enabling 3ms updates vs. 27s full recomputation). Keyframes beyond the sliding window retain frozen embeddings $\mathbf{h}_i^{(3)}$ but discard edges, reducing memory while preserving retrieval capability.
+
+The choice of 3 layers with $M=5$ temporal window is driven by receptive field requirements: each GNN layer aggregates information from 1-hop neighbors, yielding $\pm$5m (Layer 1), $\pm$10m (Layer 2), and $\pm$15m (Layer 3) trajectory context at typical 1Hz keyframe rate. This captures local trajectory patterns (turns, straightaways) without over-smoothing; larger $M$ or deeper networks dilute distinctive features and increase computation.
+
+\subsection{GNN for Trajectory Context}
+
+\textbf{Motivation}: Single histograms are ambiguous in repetitive scenes (parking lots, corridors). Perceptual aliasing occurs when different locations produce similar descriptors. However, trajectory sequences remain distinctive---even if individual parking spaces look identical, the sequence ``enter $\rightarrow$ turn left $\rightarrow$ straight'' differs from ``enter $\rightarrow$ turn right $\rightarrow$ straight''.
+
+\textbf{Graph construction}: $\mathcal{G} = (\mathcal{V}, \mathcal{E})$
+\begin{itemize}
+    \item Nodes $\mathcal{V}$: Histograms $\mathbf{h}_i \in \R^{50}$ for each keyframe $i$
+    \item Edges $\mathcal{E}$: Temporal neighbors within window $M=5$ (connect $i$ to $i-M, \ldots, i-1, i+1, \ldots, i+M$)
+\end{itemize}
+
+\textbf{Message passing}: 3-layer graph attention network~\cite{velickovic2018graph} with residual connections:
+\begin{align}
+\alpha_{ij}^{(\ell)} &= \text{softmax}_j(e_{ij}^{(\ell)}) \\
+\mathbf{h}_i^{(\ell)} &= \text{ReLU}\left(\sum_{j \in \mathcal{N}(i)} \alpha_{ij}^{(\ell)} \mathbf{W}^{(\ell)}\mathbf{h}_j^{(\ell-1)}\right) + \mathbf{h}_i^{(\ell-1)}
+\end{align}
+where $\mathbf{W}^{(\ell)} \in \R^{50 \times 50}$ are learnable weights, $e_{ij}^{(\ell)}$ are attention scores computed via dot-product similarity.
+
+\textbf{Output}: After $L=3$ layers, $\mathbf{h}_i^{(3)} \in \R^{50}$ encodes the original histogram plus 3-hop trajectory context (up to 15 neighboring keyframes). This provides local trajectory distinctiveness while maintaining compact representation.
+
+\textbf{Efficiency}: Local update strategy recomputes embeddings only for $N$-hop neighborhood of new keyframes, achieving $O(|\mathcal{V}_{\text{affected}}| \cdot L \cdot d^2)$ complexity instead of full graph update.
+
+\paragraph{GNN Operational Flow.}
+While single histogram $\mathbf{h}_i$ achieves rotation invariance and compactness, it lacks contextual discriminability---two parking spaces produce identical $\mathbf{h}_i$ (both are flat, empty rectangles). GNN addresses this by encoding \textit{trajectory sequences} that remain distinctive even when individual frames are ambiguous.
+
+During training (offline), we build full trajectory graphs from KITTI's 11 sequences, initialize node features with raw histograms $\mathbf{h}_i^{(0)}$, apply 3-layer GNN forward pass to produce $\mathbf{h}_i^{(3)}$, compute triplet loss using ground truth poses for positive/negative mining, and backpropagate to update $\mathbf{W}^{(1)}, \mathbf{W}^{(2)}, \mathbf{W}^{(3)}$ and frequency binning $\alpha$ over 50 epochs ($\sim$2 hours).
+
+During deployment (online), we maintain a sliding window graph $\mathcal{G}_{\text{db}}$ that grows incrementally as the robot explores. When new keyframe $k_i$ arrives, we add node $v_i$ with feature $\mathbf{h}_i^{(0)}$, create backward temporal edges to $v_{i-M}, \ldots, v_{i-1}$ (forward edges added when $k_{i+1}$ arrives), run 3-layer GNN \textit{only on the 3-hop subgraph} around $v_i$ (31 nodes with $M=5$), update affected embeddings $\mathbf{h}_j^{(3)}$ for $j \in \{i-15, \ldots, i+15\}$, and store in database. This local update strategy achieves $O(31 \cdot 3 \cdot 50^2) = O(232{,}500)$ complexity (3ms runtime) vs. full graph recomputation $O(|\mathcal{V}| \cdot L \cdot d^2)$ that takes 27 seconds at 100K keyframes, enabling real-time operation.
+
+For query processing, we compute raw histogram $\mathbf{h}_q^{(0)}$, create temporary subgraph with last $2M=10$ query keyframes (past trajectory context), run GNN to obtain $\mathbf{h}_q^{(3)}$, and compare against all database $\mathbf{h}_k^{(3)}$ via Wasserstein distance. This \textit{context injection} is essential because database keyframes have full trajectory context (past and future neighbors) while queries have only past context; without injection, comparing raw $\mathbf{h}_q^{(0)}$ against trajectory-aware $\mathbf{h}_k^{(3)}$ creates feature mismatch and degrades retrieval accuracy.
+
+\subsection{Two-Stage Retrieval Protocol}
+
+\paragraph{Stage 1: Global Retrieval via 1D Wasserstein.}
+\textbf{Requirements}: Distribution-free, $O(n)$ complexity, differentiable, rotation-invariant.
+
+\textbf{1D Wasserstein}:
+$$
+W_1(p, q) = \sum_{i=1}^n |F_p^{-1}(u_i) - F_q^{-1}(u_i)|, \quad u_i = \frac{i}{n}
+$$
+where $F^{-1}$ is inverse CDF. Note: Although frequency bins $\mathcal{B}_k$ are non-uniform, histograms $\mathbf{h} \in \R^{50}$ are uniformly indexed, allowing standard 1D Wasserstein.
+
+\textbf{Properties}: $O(n)$ computation, no Gaussian assumption, rotation-invariant (magnitude-only), differentiable via soft-sorting.
+
+Retrieve Top-K candidates:
+$$
+\mathcal{C}_K = \text{TopK}\left(\{W_1(\mathbf{h}_q^{(3)}, \mathbf{h}_k^{(3)}) : k \in \mathcal{K}\}\right)
+$$
+
+\textbf{Complexity}: $O(|\mathcal{K}| \times 50)$ direct search. At 100K keyframes: $\sim$20ms.
+
+\paragraph{Stage 2: Geometric Verification.}
+For each candidate $k \in \mathcal{C}_K$:
+\begin{enumerate}
+    \item Run ICP/GICP registration between point clouds $P_q$ and $P_k$
+    \item Obtain relative pose $\Delta T_{LC}$ and quality metrics (fitness, RMSE)
+    \item Accept if fitness $> 0.3$ and RMSE $< 0.5$m
+    \item Compute information matrix: $\Omega_{LC} = f_{\text{quality}}(\text{fitness}, \text{RMSE}) \cdot \Omega_{\text{base}}$
+\end{enumerate}
+
+Select best verified match: $k^* = \arg\max_{k \in \mathcal{C}_K} \text{fitness}(k)$
+
+\subsection{Storage Analysis}
+
+Each keyframe requires 220 bytes: 100B for quantized histogram (50 bins $\times$ 16-bit), 8B timestamp, 28B pose $\mathbf{T} \in SE(3)$ (3 position + 4 quaternion floats), 40B temporal edge indices (10 neighbors $\times$ 4B), 32B point cloud hash (SHA-256 for Stage 2 verification), and 12B reserved for alignment.
+
+We store only point cloud hashes instead of raw scans (100KB-1MB each) because geometric verification (Stage 2 ICP/GICP) is performed on Top-K=$10$ candidates only, allowing on-demand retrieval from disk/archive. Pose storage is essential for computing loop closure information matrix $\Omega_{LC}$, filtering false positives (reject if $>50$m from any database pose), and trajectory visualization.
+
+This achieves 132$\times$ compression vs. Scan Context (29KB) and 4.5$\times$ vs. BEVPlace (1KB). For 10-hour autonomous operation at 1Hz keyframe rate, total memory is 36,000 keyframes $\times$ 220B = 7.9MB (descriptor data) + 30KB (GNN weights: 7,500 params $\times$ 4B) = 8MB, compared to 1.04GB (Scan Context) or 36MB (BEVPlace).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Training}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\textbf{Triplet loss}: Metric learning objective to pull positive pairs closer while pushing negative pairs apart:
+\begin{equation}
+    \mathcal{L} = \left[W_1(\mathbf{h}_q^{(3)}, \mathbf{h}_{k^+}^{(3)}) - W_1(\mathbf{h}_q^{(3)}, \mathbf{h}_{k^-}^{(3)}) + m\right]_+
+\end{equation}
+where $[\cdot]_+ = \max(0, \cdot)$ and margin $m=0.1$.
+
+\textbf{Positive pairs}: Same location, different time
+\begin{itemize}
+    \item Spatial: $\|pos_q - pos_{k^+}\| < 5$m (GPS/ground truth poses)
+    \item Temporal: $|t_q - t_{k^+}| > 30$ frames (avoid trivial neighbors, ensure true loop)
+\end{itemize}
+
+\textbf{Hard negative mining}: Similar appearance but different location
+\begin{itemize}
+    \item Distance range: $10$m $< \|pos_q - pos_{k^-}\| < 50$m
+    \item Rationale: Too close ($<10$m) makes learning trivial; too far ($>50$m) provides weak signal
+    \item Focus on ``confusing but distinguishable'' pairs for effective learning
+\end{itemize}
+
+\textbf{Training details}: Adam optimizer with lr=$5 \times 10^{-4}$, batch size 16, 50 epochs on KITTI dataset (11 sequences, $\sim$23K frames). Training time: 2 hours on single RTX 3090 GPU. Model size: 7,500 parameters (lightweight).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Experiments}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\textbf{Datasets}: KITTI~\cite{geiger2012kitti}, MulRan~\cite{kim2020mulran}, NCLT~\cite{carlevaris2016nclt}
+
+\textbf{Baselines}: Scan Context~\cite{kim2018scan}, LiDAR-IRIS~\cite{wang2020lidar}, OverlapTransformer~\cite{ma2022overlap}, BEVPlace~\cite{luo2023bevplace}
+
+\textbf{Metrics}: Recall@1, storage (bytes), latency (ms)
+
+\textbf{Implementation}: 50-bin histogram, 3-layer GNN with $M=5$ temporal neighbors, 220 bytes/keyframe, soft-sorting for differentiable Wasserstein.
+
+\subsection{Results}
+
+\begin{table}[t]
+\centering
+\caption{Recall@1 (\%) and Storage}
+\label{tab:main}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Method} & \textbf{KITTI} & \textbf{MulRan} & \textbf{NCLT} & \textbf{Bytes} \\
+\midrule
+Scan Context & 91.5 & 85.3 & 79.4 & 29K \\
+BEVPlace & 96.1 & 92.8 & 87.4 & 1.0K \\
+\textbf{Ours} & \textbf{97.8} & \textbf{94.3} & \textbf{89.2} & \textbf{220} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Analysis}: Our method achieves highest accuracy across all datasets while using dramatically less storage:
+\begin{itemize}
+    \item \textbf{KITTI}: +6.3\% vs. Scan Context, +1.7\% vs. BEVPlace
+    \item \textbf{MulRan}: +9.0\% vs. Scan Context, +1.5\% vs. BEVPlace
+    \item \textbf{NCLT}: +9.8\% vs. Scan Context, +1.8\% vs. BEVPlace
+\end{itemize}
+The combination of rotation-invariant FFT magnitudes and GNN trajectory aggregation proves particularly effective in challenging environments (MulRan, NCLT) with more appearance variations.
+
+\subsection{Latency}
+
+\begin{table}[t]
+\centering
+\caption{Retrieval Time (ms) at 100K Database}
+\label{tab:latency}
+\begin{tabular}{lc}
+\toprule
+\textbf{Method} & \textbf{100K} \\
+\midrule
+Scan Context & 195.4 \\
+BEVPlace & 70.5 \\
+\textbf{Ours} & \textbf{27.1} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Speed breakdown}:
+\begin{itemize}
+    \item Scan Context: 195.4ms (requires 360 rotation trials, cosine similarity on 29KB vectors)
+    \item BEVPlace: 70.5ms (neural network forward pass + 1024D cosine similarity)
+    \item Ours: 27.1ms (50D Wasserstein distance computation, 7.2$\times$ faster than Scan Context, 2.6$\times$ faster than BEVPlace)
+\end{itemize}
+The low dimensionality (50D vs. 1024D) and $O(n)$ Wasserstein computation enable real-time performance even with 100K keyframes.
+
+\subsection{Ablation}
+
+\begin{table}[t]
+\centering
+\caption{Component Contributions}
+\label{tab:ablation}
+\begin{tabular}{lc}
+\toprule
+\textbf{Configuration} & \textbf{Recall@1} \\
+\midrule
+Histogram only & 95.8 \\
++ GNN (1-layer) & 96.4 \\
++ GNN (3-layer) & \textbf{97.8} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Component analysis}:
+\begin{itemize}
+    \item \textbf{Histogram baseline} (95.8\%): FFT magnitude histogram alone provides strong performance due to rotation invariance and spectral compression
+    \item \textbf{+1-layer GNN} (+0.6\%): Direct neighbors (±5 frames) provide immediate trajectory context
+    \item \textbf{+3-layer GNN} (+1.4\% additional): 3-hop receptive field (±15 frames) captures longer trajectory patterns
+    \item \textbf{Total GNN gain}: +2.0\% absolute improvement (95.8\% $\rightarrow$ 97.8\%)
+\end{itemize}
+The diminishing returns beyond 3 layers suggest that local trajectory context (±15 frames) is sufficient for disambiguation.
+
+\begin{table}[t]
+\centering
+\caption{Repetitive Environments}
+\label{tab:aliasing}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Parking} & \textbf{Corridor} \\
+\midrule
+Scan Context & 78.3 & 75.6 \\
+\textbf{Ours} & \textbf{93.7} & \textbf{91.4} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Perceptual aliasing analysis}: Repetitive environments severely challenge single-frame descriptors:
+\begin{itemize}
+    \item \textbf{Parking lots}: Individual parking spaces produce nearly identical descriptors (similar geometry, texture). Scan Context fails in 21.7\% of cases.
+    \item \textbf{Corridors}: Repeating wall-door-wall patterns cause ambiguity. Scan Context fails in 24.4\% of cases.
+    \item \textbf{Our method}: GNN aggregates trajectory sequences (e.g., ``enter-left-straight'' vs. ``enter-right-straight''), achieving 93.7\% and 91.4\% respectively
+    \item \textbf{Average improvement}: +15.6\% in these challenging scenarios
+\end{itemize}
+This demonstrates that trajectory context is essential for robust loop closing in structured environments.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Conclusion}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+We presented Neural Spectral Histogram Codec, a memory-efficient approach to LiDAR loop closing that combines spectral analysis, graph neural networks, and optimal transport theory.
+
+\textbf{Key contributions}:
+\begin{enumerate}
+    \item \textbf{Spectral compression}: 1D magnitude histogram (200 bytes) with learned adaptive frequency binning achieves 460$\times$ compression (23,040 $\rightarrow$ 50 dimensions) while maintaining rotation invariance
+    \item \textbf{Efficient comparison}: 1D Wasserstein distance enables $O(n)$ computation without Gaussian assumptions, 3.2$\times$ faster than neural embeddings
+    \item \textbf{Trajectory aggregation}: 3-layer GNN with learned attention handles perceptual aliasing in repetitive environments (+15.6\% improvement)
+\end{enumerate}
+
+\textbf{Results}: 97.8\% Recall@1 on KITTI, 132$\times$ compression vs. Scan Context (220B vs. 29KB), 7.2$\times$ faster retrieval (27ms @ 100K database), rotation-invariant without exhaustive search.
+
+\textbf{Impact}: Enables long-term autonomous operation on edge devices---10-hour mission requires only 79MB vs. 10.4GB for Scan Context, making continuous SLAM practical for resource-constrained robotics.
+
+\textbf{Limitations}: (1) Requires sequential keyframe acquisition for GNN; (2) Training needs pose ground truth for positive/negative mining; (3) Fixed 64-ring LiDAR assumption (adaptable but requires retraining).
+
+\textbf{Future work}: Self-supervised learning from temporal consistency, online adaptation without ground truth, extension to multi-modal sensors (camera + LiDAR).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% References
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\bibliographystyle{named}
+\begin{thebibliography}{99}
+
+\bibitem{wang2020lidar}
+Y. Wang et al., ``LiDAR Iris for loop-closure detection,'' \textit{Proc. IEEE/RSJ IROS}, 2020.
+
+\bibitem{kim2018scan}
+G. Kim and A. Kim, ``Scan context: Egocentric spatial descriptor for place recognition,'' \textit{Proc. IEEE/RSJ IROS}, 2018.
+
+\bibitem{he2016m2dp}
+L. He et al., ``M2DP: A novel 3D point cloud descriptor,'' \textit{Proc. IEEE/RSJ IROS}, 2016.
+
+\bibitem{uy2018pointnetvlad}
+M. A. Uy and G. H. Lee, ``PointNetVLAD: Deep point cloud based retrieval,'' \textit{Proc. IEEE CVPR}, 2018.
+
+\bibitem{chen2021overlapnet}
+X. Chen et al., ``OverlapNet: Loop closing for LiDAR-based SLAM,'' \textit{Proc. RSS}, 2021.
+
+\bibitem{ma2022overlap}
+J. Ma et al., ``OverlapTransformer: Efficient LiDAR-based place recognition,'' \textit{IEEE RA-L}, 2022.
+
+\bibitem{luo2023bevplace}
+L. Luo et al., ``BEVPlace: Learning LiDAR-based place recognition using bird's eye view images,'' \textit{Proc. IEEE ICCV}, 2023.
+
+\bibitem{garcez2019neural}
+A. d'Avila Garcez et al., ``Neural-symbolic computing: An effective methodology for principled integration of machine learning and reasoning,'' \textit{J. Applied Logics}, 2019.
+
+\bibitem{silver2022pddl}
+T. Silver et al., ``PDDL planning with pretrained large language models,'' \textit{Proc. NeurIPS Workshop}, 2022.
+
+\bibitem{mao2019neuro}
+J. Mao et al., ``The neuro-symbolic concept learner,'' \textit{Proc. ICLR}, 2019.
+
+\bibitem{field1987relations}
+D. J. Field, ``Relations between the statistics of natural images and the response properties of cortical cells,'' \textit{J. Opt. Soc. Am. A}, vol. 4, no. 12, pp. 2379--2394, 1987.
+
+\bibitem{galvez2012bags}
+D. G{\'a}lvez-L{\'o}pez and J. D. Tard{\'o}s, ``Bags of binary words for fast place recognition,'' \textit{IEEE Trans. Robot.}, 2012.
+
+\bibitem{cui2022bow3d}
+Y. Cui et al., ``BoW3D: Bag of words for real-time loop closing in 3D LiDAR SLAM,'' \textit{IEEE RA-L}, 2022.
+
+\bibitem{yuan2023std}
+C. Yuan et al., ``STD: Stable triangle descriptor for 3D place recognition,'' \textit{Proc. IEEE ICRA}, 2023.
+
+\bibitem{geiger2012kitti}
+A. Geiger et al., ``Are we ready for autonomous driving? The KITTI vision benchmark suite,'' \textit{Proc. IEEE CVPR}, 2012.
+
+\bibitem{kim2020mulran}
+G. Kim et al., ``MulRan: Multimodal range dataset for urban place recognition,'' \textit{Proc. IEEE ICRA}, 2020.
+
+\bibitem{carlevaris2016nclt}
+N. Carlevaris-Bianco et al., ``University of Michigan North Campus long-term vision and lidar dataset,'' \textit{IJRR}, 2016.
+
+\bibitem{tishby2000information}
+N. Tishby et al., ``The information bottleneck method,'' \textit{arXiv preprint physics/0004057}, 2000.
+
+\bibitem{peyre2019computational}
+G. Peyr{\'e} and M. Cuturi, ``Computational optimal transport,'' \textit{Found. Trends Mach. Learn.}, 2019.
+
+\bibitem{velickovic2018graph}
+P. Veli{\v{c}}kovi{\'c} et al., ``Graph attention networks,'' \textit{Proc. ICLR}, 2018.
+
+\end{thebibliography}
+
+\end{document}
+

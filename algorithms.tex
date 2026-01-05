@@ -1,0 +1,361 @@
+\documentclass{article}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% Custom commands
+\newcommand{\R}{\mathbb{R}}
+
+\begin{document}
+
+\title{Neural Spectral Histogram Codec: Pseudo-Code Algorithms}
+\author{}
+\date{}
+\maketitle
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Descriptor Generation}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{algorithm}[H]
+\caption{Spectral Histogram Encoding}
+\label{alg:encoding}
+\begin{algorithmic}[1]
+\REQUIRE LiDAR point cloud $\mathcal{P} = \{\mathbf{p}_i\}$, learned binning parameter $\alpha$
+\ENSURE Quantized histogram $\mathbf{h}^Q \in \mathbb{Z}^{50}$
+
+\STATE // \textbf{Step 1: Convert to panoramic range image}
+\STATE Initialize range image $\mathbf{R} \in \R^{64 \times 360}$ with zeros
+\FOR{each point $\mathbf{p}_i = (x_i, y_i, z_i)^T \in \mathcal{P}$}
+    \STATE $r_i \gets \sqrt{x_i^2 + y_i^2 + z_i^2}$
+    \STATE $\theta_i \gets \text{atan2}(y_i, x_i)$ \COMMENT{Azimuth angle $\in [0, 2\pi)$}
+    \STATE $\phi_i \gets \arcsin(z_i/r_i)$ \COMMENT{Elevation angle $\in [-\pi/2, \pi/2]$}
+    \STATE $j \gets \lfloor (\phi_i + \pi/2) \times 64 / \pi \rfloor$ \COMMENT{Elevation bin}
+    \STATE $t \gets \lfloor \theta_i \times 360 / (2\pi) \rfloor$ \COMMENT{Azimuth bin}
+    \STATE $\mathbf{R}[j, t] \gets \max(\mathbf{R}[j, t], r_i)$ \COMMENT{Aggregate max range}
+\ENDFOR
+
+\STATE
+\STATE // \textbf{Step 2: Apply ring-wise FFT for rotation invariance}
+\STATE Initialize magnitude spectrum $\mathbf{M} \in \R^{64 \times 360}$
+\FOR{each elevation ring $j = 0$ to $63$}
+    \STATE $\hat{\mathbf{R}}_j \gets \text{FFT}(\mathbf{R}[j, :])$ \COMMENT{1D FFT along azimuth}
+    \STATE $\mathbf{M}[j, :] \gets |\hat{\mathbf{R}}_j|$ \COMMENT{Take magnitude (discard phase)}
+\ENDFOR
+
+\STATE
+\STATE // \textbf{Step 3: Adaptive frequency binning}
+\STATE $f_{\max} \gets 180$ \COMMENT{Nyquist frequency}
+\FOR{$k = 0$ to $50$}
+    \STATE $u_k \gets k / 50$
+    \STATE $\mathcal{B}_k \gets f_{\max} \times \frac{e^{\alpha u_k} - 1}{e^{\alpha} - 1}$ \COMMENT{Exponential warping}
+\ENDFOR
+
+\STATE
+\STATE // \textbf{Step 4: Construct 1D magnitude histogram}
+\STATE Initialize histogram $\mathbf{h} \in \R^{50}$ with zeros
+\FOR{$k = 0$ to $49$}
+    \FOR{$j = 0$ to $63$} \COMMENT{All elevation rings}
+        \FOR{$u = \mathcal{B}_k$ to $\mathcal{B}_{k+1} - 1$} \COMMENT{Frequency range}
+            \STATE $\mathbf{h}[k] \gets \mathbf{h}[k] + \mathbf{M}[j, u]$
+        \ENDFOR
+    \ENDFOR
+\ENDFOR
+\STATE $\mathbf{h} \gets \mathbf{h} / \|\mathbf{h}\|_1$ \COMMENT{L1 normalization}
+
+\STATE
+\STATE // \textbf{Step 5: Quantization for compression}
+\FOR{$k = 0$ to $49$}
+    \STATE $\mathbf{h}^Q[k] \gets \lfloor \mathbf{h}[k] \times 2^{16} \rfloor$ \COMMENT{16-bit quantization}
+\ENDFOR
+
+\RETURN $\mathbf{h}^Q$ \COMMENT{100 bytes (50 × 16-bit)}
+\end{algorithmic}
+\end{algorithm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Keyframe Management}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{algorithm}[H]
+\caption{Keyframe Selection and Graph Update}
+\label{alg:keyframe}
+\begin{algorithmic}[1]
+\REQUIRE Current scan $S_i$, pose $\mathbf{T}_i$, timestamp $t_i$, last keyframe $k_{\text{last}}$
+\ENSURE Updated graph $\mathcal{G} = (\mathcal{V}, \mathcal{E})$, keyframe database $\mathcal{K}$
+
+\STATE // \textbf{Step 1: Check keyframe selection criteria}
+\STATE $\text{is\_keyframe} \gets \text{false}$
+
+\STATE // Criterion 1: Distance threshold
+\IF{$\|\mathbf{p}_i - \mathbf{p}_{k_{\text{last}}}\| > 0.5$ m}
+    \STATE $\text{is\_keyframe} \gets \text{true}$
+\ENDIF
+
+\STATE // Criterion 2: Rotation threshold
+\IF{$\|\mathbf{R}_i - \mathbf{R}_{k_{\text{last}}}\|_F > 15^\circ$}
+    \STATE $\text{is\_keyframe} \gets \text{true}$
+\ENDIF
+
+\STATE // Criterion 3: Geometric novelty (voxel IoU)
+\STATE $\mathcal{P}_i \gets \text{Voxelize}(S_i, \text{resolution}=0.2\text{m})$
+\STATE $\mathcal{P}_{\text{last}} \gets \text{Voxelize}(S_{k_{\text{last}}}, \text{resolution}=0.2\text{m})$
+\STATE $\text{IoU} \gets |\mathcal{P}_i \cap \mathcal{P}_{\text{last}}| / |\mathcal{P}_i \cup \mathcal{P}_{\text{last}}|$
+\IF{$\text{IoU} < 0.7$}
+    \STATE $\text{is\_keyframe} \gets \text{true}$
+\ENDIF
+
+\STATE // Criterion 4: Temporal threshold
+\IF{$t_i - t_{k_{\text{last}}} > 5$ seconds}
+    \STATE $\text{is\_keyframe} \gets \text{true}$
+\ENDIF
+
+\STATE
+\IF{$\text{is\_keyframe} = \text{true}$}
+    \STATE // \textbf{Step 2: Create new keyframe node}
+    \STATE $\mathbf{h}_i^{(0)} \gets \text{EncodeHistogram}(S_i, \alpha)$ \COMMENT{Algorithm 1}
+    \STATE $v_i \gets \text{CreateNode}(\mathbf{h}_i^{(0)}, \mathbf{T}_i, t_i)$
+    \STATE $\mathcal{V} \gets \mathcal{V} \cup \{v_i\}$
+
+    \STATE
+    \STATE // \textbf{Step 3: Create temporal edges}
+    \STATE $M \gets 5$ \COMMENT{Temporal window size}
+    \STATE $n \gets |\mathcal{V}|$ \COMMENT{Current graph size}
+    \FOR{$j = \max(0, n-M)$ to $n-1$}
+        \STATE $\mathcal{E} \gets \mathcal{E} \cup \{(v_i, v_j), (v_j, v_i)\}$ \COMMENT{Bidirectional}
+    \ENDFOR
+
+    \STATE
+    \STATE // \textbf{Step 4: Local GNN update}
+    \STATE $\mathcal{V}_{\text{affected}} \gets$ \{nodes within 3-hop of $v_i$\}
+    \STATE UpdateGNNEmbeddings($\mathcal{G}$, $\mathcal{V}_{\text{affected}}$) \COMMENT{Algorithm 3}
+
+    \STATE
+    \STATE // \textbf{Step 5: Store metadata}
+    \STATE $\text{hash}_i \gets \text{SHA256}(S_i)$ \COMMENT{Point cloud hash for Stage 2}
+    \STATE $\mathcal{K} \gets \mathcal{K} \cup \{(i, \mathbf{h}_i^{(3)}, \mathbf{T}_i, t_i, \text{hash}_i)\}$
+
+    \STATE
+    \STATE // \textbf{Step 6: Sliding window maintenance}
+    \IF{$|\mathcal{V}| > 1000$}
+        \STATE $v_{\text{old}} \gets \mathcal{V}[0]$ \COMMENT{Oldest node}
+        \STATE Freeze embedding $\mathbf{h}_{\text{old}}^{(3)}$ \COMMENT{Keep descriptor}
+        \STATE Remove edges incident to $v_{\text{old}}$ from $\mathcal{E}$ \COMMENT{Discard edges}
+    \ENDIF
+
+    \STATE $k_{\text{last}} \gets i$ \COMMENT{Update last keyframe index}
+\ENDIF
+
+\RETURN $\mathcal{G}$, $\mathcal{K}$
+\end{algorithmic}
+\end{algorithm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{GNN Training and Deployment}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{algorithm}[H]
+\caption{GNN Forward Pass (3-Layer Graph Attention)}
+\label{alg:gnn}
+\begin{algorithmic}[1]
+\REQUIRE Graph $\mathcal{G} = (\mathcal{V}, \mathcal{E})$, node features $\{\mathbf{h}_i^{(0)}\}$, weights $\{\mathbf{W}^{(\ell)}\}_{\ell=1}^3$
+\ENSURE Updated embeddings $\{\mathbf{h}_i^{(3)}\}$
+
+\FOR{layer $\ell = 1$ to $3$}
+    \FOR{each node $i \in \mathcal{V}$}
+        \STATE // \textbf{Compute attention scores}
+        \FOR{each neighbor $j \in \mathcal{N}(i)$}
+            \STATE $e_{ij}^{(\ell)} \gets (\mathbf{h}_i^{(\ell-1)})^T \mathbf{h}_j^{(\ell-1)}$ \COMMENT{Dot-product similarity}
+        \ENDFOR
+
+        \STATE
+        \STATE // \textbf{Normalize attention weights}
+        \FOR{each neighbor $j \in \mathcal{N}(i)$}
+            \STATE $\alpha_{ij}^{(\ell)} \gets \frac{\exp(e_{ij}^{(\ell)})}{\sum_{k \in \mathcal{N}(i)} \exp(e_{ik}^{(\ell)})}$ \COMMENT{Softmax}
+        \ENDFOR
+
+        \STATE
+        \STATE // \textbf{Aggregate neighbor features}
+        \STATE $\mathbf{m}_i \gets \sum_{j \in \mathcal{N}(i)} \alpha_{ij}^{(\ell)} \mathbf{W}^{(\ell)} \mathbf{h}_j^{(\ell-1)}$ \COMMENT{Weighted sum}
+
+        \STATE
+        \STATE // \textbf{Residual connection}
+        \STATE $\mathbf{h}_i^{(\ell)} \gets \text{ReLU}(\mathbf{m}_i) + \mathbf{h}_i^{(\ell-1)}$ \COMMENT{Skip connection}
+    \ENDFOR
+\ENDFOR
+
+\RETURN $\{\mathbf{h}_i^{(3)}\}_{i \in \mathcal{V}}$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{GNN Training (Offline)}
+\label{alg:gnn_train}
+\begin{algorithmic}[1]
+\REQUIRE Training sequences $\{\mathcal{S}_1, \ldots, \mathcal{S}_N\}$, ground truth poses
+\ENSURE Learned weights $\{\mathbf{W}^{(1)}, \mathbf{W}^{(2)}, \mathbf{W}^{(3)}\}$, binning parameter $\alpha$
+
+\STATE Initialize $\mathbf{W}^{(\ell)} \in \R^{50 \times 50}$ randomly for $\ell = 1, 2, 3$
+\STATE Initialize $\alpha \gets 2.0$ \COMMENT{Low-frequency emphasis}
+\STATE $m \gets 0.1$ \COMMENT{Triplet margin}
+
+\FOR{epoch $= 1$ to $50$}
+    \STATE // \textbf{Build full trajectory graphs}
+    \FOR{each sequence $\mathcal{S}_k$}
+        \STATE $\mathcal{G}_k \gets \text{BuildGraph}(\mathcal{S}_k)$ \COMMENT{Algorithm 2}
+        \STATE $\{\mathbf{h}_i^{(0)}\} \gets$ \{raw histograms from sequence\}
+        \STATE $\{\mathbf{h}_i^{(3)}\} \gets \text{GNNForward}(\mathcal{G}_k, \{\mathbf{h}_i^{(0)}\}, \{\mathbf{W}^{(\ell)}\})$ \COMMENT{Alg 3}
+    \ENDFOR
+
+    \STATE
+    \STATE // \textbf{Mine triplets}
+    \STATE $\mathcal{T} \gets \emptyset$ \COMMENT{Triplet set}
+    \FOR{each query frame $q$}
+        \STATE // Positive: same location, different time
+        \STATE $k^+ \gets$ \{frame where $\|\text{pos}_q - \text{pos}_{k^+}\| < 5$m AND $|t_q - t_{k^+}| > 30$\}
+
+        \STATE // Hard negative: different location, similar appearance
+        \STATE $k^- \gets \arg\min_{k'} W_1(\mathbf{h}_q^{(3)}, \mathbf{h}_{k'}^{(3)})$
+        \STATE \hspace{2em} subject to $10$m $< \|\text{pos}_q - \text{pos}_{k^-}\| < 50$m
+
+        \STATE $\mathcal{T} \gets \mathcal{T} \cup \{(q, k^+, k^-)\}$
+    \ENDFOR
+
+    \STATE
+    \STATE // \textbf{Compute triplet loss}
+    \STATE $\mathcal{L} \gets 0$
+    \FOR{each $(q, k^+, k^-) \in \mathcal{T}$}
+        \STATE $d^+ \gets W_1(\mathbf{h}_q^{(3)}, \mathbf{h}_{k^+}^{(3)})$ \COMMENT{Positive distance}
+        \STATE $d^- \gets W_1(\mathbf{h}_q^{(3)}, \mathbf{h}_{k^-}^{(3)})$ \COMMENT{Negative distance}
+        \STATE $\mathcal{L} \gets \mathcal{L} + \max(0, d^+ - d^- + m)$ \COMMENT{Hinge loss}
+    \ENDFOR
+    \STATE $\mathcal{L} \gets \mathcal{L} / |\mathcal{T}|$ \COMMENT{Average over batch}
+
+    \STATE
+    \STATE // \textbf{Backpropagation and update}
+    \STATE Compute $\nabla_{\mathbf{W}^{(\ell)}} \mathcal{L}$, $\nabla_\alpha \mathcal{L}$ via autograd
+    \STATE Update $\mathbf{W}^{(\ell)} \gets \mathbf{W}^{(\ell)} - \eta \nabla_{\mathbf{W}^{(\ell)}} \mathcal{L}$ for $\ell = 1, 2, 3$
+    \STATE Update $\alpha \gets \alpha - \eta \nabla_\alpha \mathcal{L}$
+\ENDFOR
+
+\RETURN $\{\mathbf{W}^{(1)}, \mathbf{W}^{(2)}, \mathbf{W}^{(3)}\}$, $\alpha$
+\end{algorithmic}
+\end{algorithm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Loop Closing Retrieval}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{algorithm}[H]
+\caption{Two-Stage Loop Closing}
+\label{alg:retrieval}
+\begin{algorithmic}[1]
+\REQUIRE Query scan $S_q$, keyframe database $\mathcal{K}$, graph $\mathcal{G}$
+\ENSURE Loop closure $k^*$ and relative pose $\Delta T_{LC}$
+
+\STATE // \textbf{Stage 1: Global retrieval via 1D Wasserstein}
+\STATE
+\STATE // Encode query with trajectory context
+\STATE $\mathbf{h}_q^{(0)} \gets \text{EncodeHistogram}(S_q, \alpha)$ \COMMENT{Algorithm 1}
+\STATE $\mathcal{G}_q \gets$ \{temporary subgraph with last 10 query keyframes\}
+\STATE $\mathbf{h}_q^{(3)} \gets \text{GNNForward}(\mathcal{G}_q, \{\mathbf{h}_q^{(0)}\}, \{\mathbf{W}^{(\ell)}\})$ \COMMENT{Context injection}
+
+\STATE
+\STATE // Compute 1D Wasserstein distance to all database keyframes
+\STATE Initialize distances $\mathcal{D} \gets \emptyset$
+\FOR{each $(k, \mathbf{h}_k^{(3)}, \mathbf{T}_k, t_k, \text{hash}_k) \in \mathcal{K}$}
+    \STATE // Reject if spatially too far
+    \IF{$\|\text{pos}_q - \text{pos}_k\| > 50$ m}
+        \STATE \textbf{continue}
+    \ENDIF
+
+    \STATE
+    \STATE // Compute 1D Wasserstein via sorted histograms
+    \STATE $\mathbf{h}_q^{\text{sorted}} \gets \text{sort}(\mathbf{h}_q^{(3)})$
+    \STATE $\mathbf{h}_k^{\text{sorted}} \gets \text{sort}(\mathbf{h}_k^{(3)})$
+    \STATE $d_k \gets \sum_{i=1}^{50} |\mathbf{h}_q^{\text{sorted}}[i] - \mathbf{h}_k^{\text{sorted}}[i]|$ \COMMENT{$O(50)$ computation}
+
+    \STATE $\mathcal{D} \gets \mathcal{D} \cup \{(k, d_k)\}$
+\ENDFOR
+
+\STATE
+\STATE // Select Top-K candidates
+\STATE $K \gets 10$ \COMMENT{Number of candidates for verification}
+\STATE $\mathcal{C}_K \gets \text{TopK}(\mathcal{D}, K)$ \COMMENT{Smallest distances}
+
+\STATE
+\STATE // \textbf{Stage 2: Geometric verification via ICP/GICP}
+\STATE
+\STATE Initialize best match: $k^* \gets \text{null}$, $\text{fitness}_{\text{best}} \gets 0$
+\FOR{each candidate $k \in \mathcal{C}_K$}
+    \STATE // Retrieve point cloud from hash
+    \STATE $P_k \gets \text{LoadPointCloud}(\text{hash}_k)$
+
+    \STATE
+    \STATE // ICP/GICP registration
+    \STATE $(\Delta T_{LC}, \text{fitness}, \text{RMSE}) \gets \text{GICP}(P_q, P_k)$
+
+    \STATE
+    \STATE // Quality thresholding
+    \IF{fitness $> 0.3$ AND RMSE $< 0.5$ m}
+        \IF{fitness $> \text{fitness}_{\text{best}}$}
+            \STATE $k^* \gets k$
+            \STATE $\text{fitness}_{\text{best}} \gets \text{fitness}$
+            \STATE $\Delta T_{LC}^* \gets \Delta T_{LC}$
+        \ENDIF
+    \ENDIF
+\ENDFOR
+
+\STATE
+\IF{$k^* \neq \text{null}$}
+    \STATE // Compute information matrix for pose graph
+    \STATE $\Omega_{LC} \gets f_{\text{quality}}(\text{fitness}_{\text{best}}, \text{RMSE}) \cdot \Omega_{\text{base}}$
+    \RETURN $(k^*, \Delta T_{LC}^*, \Omega_{LC})$ \COMMENT{Successful loop closure}
+\ELSE
+    \RETURN $\text{null}$ \COMMENT{No loop closure found}
+\ENDIF
+\end{algorithmic}
+\end{algorithm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{System Pipeline}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{algorithm}[H]
+\caption{Neural Spectral Histogram Codec - Main Pipeline}
+\label{alg:main}
+\begin{algorithmic}[1]
+\REQUIRE LiDAR stream $\{S_1, S_2, \ldots\}$, poses $\{\mathbf{T}_1, \mathbf{T}_2, \ldots\}$
+\ENSURE Loop closures for pose graph optimization
+
+\STATE // \textbf{Offline: Train GNN}
+\STATE $(\{\mathbf{W}^{(\ell)}\}, \alpha) \gets \text{TrainGNN}(\text{KITTI\_sequences})$ \COMMENT{Algorithm 4}
+
+\STATE
+\STATE // \textbf{Online: Incremental operation}
+\STATE Initialize graph $\mathcal{G} \gets (\emptyset, \emptyset)$
+\STATE Initialize keyframe database $\mathcal{K} \gets \emptyset$
+\STATE $k_{\text{last}} \gets 0$
+
+\FOR{each incoming scan $S_i$ with pose $\mathbf{T}_i$, time $t_i$}
+    \STATE // \textbf{Step 1: Keyframe selection and graph update}
+    \STATE $(\mathcal{G}, \mathcal{K}) \gets \text{UpdateKeyframe}(S_i, \mathbf{T}_i, t_i, k_{\text{last}}, \mathcal{G}, \mathcal{K})$ \COMMENT{Alg 2}
+
+    \STATE
+    \STATE // \textbf{Step 2: Loop closing every N frames}
+    \IF{$i \bmod N = 0$} \COMMENT{$N = 10$ for 1Hz loop detection}
+        \STATE $\text{result} \gets \text{LoopClosing}(S_i, \mathcal{K}, \mathcal{G})$ \COMMENT{Algorithm 5}
+
+        \IF{$\text{result} \neq \text{null}$}
+            \STATE $(k^*, \Delta T_{LC}, \Omega_{LC}) \gets \text{result}$
+            \STATE \textbf{Output} loop closure constraint: $(i, k^*, \Delta T_{LC}, \Omega_{LC})$
+            \STATE // Send to pose graph optimizer (e.g., g2o, GTSAM)
+        \ENDIF
+    \ENDIF
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+\end{document}
+
