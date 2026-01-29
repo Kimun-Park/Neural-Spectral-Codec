@@ -1,0 +1,138 @@
+# Multi-Dataset Training Configuration
+# Combines KITTI + NCLT for improved generalization
+
+# Data settings
+data:
+  lazy_load: true
+  cache_dir: data/preprocessed
+
+  # Multi-dataset configuration
+  datasets:
+    # Training: KITTI sequences 00-08 + NCLT 6 sequences
+    train:
+      - type: kitti
+        root: /workspace/data/kitti/dataset
+        sequences: ['00', '01', '02', '03', '04', '05', '06', '07', '08']
+        weight: 1.0
+
+      - type: nclt
+        root: /workspace/data/nclt
+        sequences: ['2012-01-08', '2012-05-11', '2012-08-04', '2012-11-04', '2012-11-16', '2013-02-23']
+        weight: 1.0
+
+    # Validation: KITTI sequence 09 only (keep consistent)
+    val:
+      - type: kitti
+        root: /workspace/data/kitti/dataset
+        sequences: ['09']
+        weight: 1.0
+
+    # Test: KITTI sequence 10
+    test:
+      - type: kitti
+        root: /workspace/data/kitti/dataset
+        sequences: ['10']
+        weight: 1.0
+
+# Encoding settings
+encoding:
+  # Range image projection
+  n_elevation: 16  # Reduced for faster training
+  n_azimuth: 360
+  elevation_range: [-24.8, 2.0]
+  max_range: 80.0
+  min_range: 1.0
+
+  # Sensor-agnostic binning (CRITICAL for multi-dataset!)
+  target_elevation_bins: 16  # Normalize KITTI (64) and NCLT (32) to 16
+
+  # Spectral histogram
+  n_bins: 50
+  alpha: 2.0
+  learnable_alpha: true
+  epsilon: 1.0e-08
+
+  # Quantization
+  quantization_bits: 16
+  descriptor_size: 220
+
+# Keyframe selection settings
+keyframe:
+  distance_threshold: 0.8    # 0.5 → 0.8 (60% increase, more selective)
+  rotation_threshold: 20.0   # 15 → 20 (33% increase)
+  overlap_threshold: 0.65    # 0.7 → 0.65 (slightly lower, easier to select)
+  temporal_threshold: 7.5    # 5 → 7.5 (50% increase)
+  voxel_size: 0.2
+  max_keyframes: 100000
+
+  # Graph settings
+  temporal_neighbors: 5
+  max_active_nodes: 1000
+  freeze_old_embeddings: true
+
+# GNN settings
+gnn:
+  # Architecture
+  input_dim: 800
+  hidden_dim: 256  # Reduced for memory efficiency (800->256->GNN->256->800)
+  output_dim: 800
+  n_layers: 3
+  n_heads: 1
+  dropout: 0.1
+  residual: true
+
+  # Local updates
+  local_update_hops: 3
+  use_local_updates: true
+
+  # Training settings
+  use_multi_gpu: false  # PyTorch Geometric doesn't support DataParallel
+  patience: 10  # Early stopping
+
+# Retrieval settings
+retrieval:
+  # Stage 1: Global retrieval
+  top_k: 10
+  spatial_filter_distance: 50.0
+  context_window: 10
+  use_wasserstein: true
+
+  # Stage 2: Geometric verification
+  verification_method: gicp
+  icp_fitness_threshold: 0.3
+  icp_rmse_threshold: 0.5
+  icp_max_iterations: 30
+  voxel_downsample: 0.3
+
+# System settings
+system:
+  device: cuda
+  num_workers: 4
+  seed: 42
+  output_dir: outputs
+  log_dir: logs
+  checkpoint_dir: checkpoints
+
+# Logging settings
+logging:
+  use_wandb: false
+  wandb_project: neural-spectral-codec-multi
+  wandb_entity: null
+  log_interval: 10
+  save_interval: 1000
+
+# Training settings
+training:
+  n_epochs: 50
+  learning_rate: 5.0e-04
+  weight_decay: 1.0e-05
+  margin: 0.1
+  log_interval: 10
+
+# Triplet mining settings
+triplet:
+  positive_distance_max: 5.0
+  negative_distance_min: 10.0
+  negative_distance_max: 50.0
+  min_temporal_distance: 30
+  n_triplets_per_anchor: 1

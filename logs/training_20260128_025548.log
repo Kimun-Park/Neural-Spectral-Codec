@@ -1,0 +1,118 @@
+[2026-01-28 02:55:48] INFO: ================================================================================
+[2026-01-28 02:55:48] INFO: NEURAL SPECTRAL CODEC - MULTI-DATASET TRAINING
+[2026-01-28 02:55:48] INFO: ================================================================================
+[2026-01-28 02:55:48] INFO: Log file: logs/training_20260128_025548.log
+[2026-01-28 02:55:48] INFO: Loading configuration from: configs/training_multi_dataset.yaml
+[2026-01-28 02:55:48] INFO:   n_elevation: 16
+[2026-01-28 02:55:48] INFO:   n_azimuth: 360
+[2026-01-28 02:55:48] INFO:   n_bins: 50
+[2026-01-28 02:55:48] INFO:   distance_threshold: 0.8m
+[2026-01-28 02:55:48] INFO:   n_epochs: 50
+[2026-01-28 02:55:48] INFO: Using device: cpu
+[2026-01-28 02:55:48] INFO: 
+[2026-01-28 02:55:48] INFO: [1/6] Creating spectral encoder...
+[2026-01-28 02:55:48] INFO:   Encoder created (n_elevation=16, n_bins=50)
+[2026-01-28 02:55:48] INFO: 
+[2026-01-28 02:55:48] INFO: [2/6] Loading training datasets...
+[2026-01-28 02:55:48] INFO:   Loading KITTI from /workspace/data/kitti/dataset
+[2026-01-28 02:55:48] INFO: Processing 4541 scans from kitti_00...
+[2026-01-28 02:55:48] INFO:   Scan 0/4541 | Keyframes: 0 | Avg: load=0.0ms, encode=0.0ms, select=0.0ms
+[2026-01-28 02:55:59] INFO:   Scan 500/4541 | Keyframes: 500 | Avg: load=1.0ms, encode=9.8ms, select=11.5ms
+[2026-01-28 02:56:10] INFO:   Scan 1000/4541 | Keyframes: 1000 | Avg: load=0.9ms, encode=9.6ms, select=10.7ms
+[2026-01-28 02:56:20] INFO:   Scan 1500/4541 | Keyframes: 1500 | Avg: load=0.9ms, encode=9.4ms, select=6.0ms
+[2026-01-28 02:56:29] INFO:   Scan 2000/4541 | Keyframes: 2000 | Avg: load=1.0ms, encode=9.9ms, select=14.7ms
+[2026-01-28 02:56:39] INFO:   Scan 2500/4541 | Keyframes: 2500 | Avg: load=0.9ms, encode=9.7ms, select=10.2ms
+[2026-01-28 02:56:48] INFO:   Scan 3000/4541 | Keyframes: 3000 | Avg: load=0.9ms, encode=10.0ms, select=6.7ms
+[2026-01-28 02:56:57] INFO:   Scan 3500/4541 | Keyframes: 3500 | Avg: load=0.9ms, encode=9.6ms, select=10.7ms
+[2026-01-28 02:57:06] INFO:   Scan 4000/4541 | Keyframes: 4000 | Avg: load=0.9ms, encode=9.5ms, select=15.8ms
+[2026-01-28 02:57:14] INFO:   Scan 4500/4541 | Keyframes: 4500 | Avg: load=0.9ms, encode=9.9ms, select=12.0ms
+[2026-01-28 02:57:14] INFO:   Completed: 4541/4541 keyframes (100.0% selection rate)
+[2026-01-28 02:57:14] INFO:     Sequence 00: 4541 keyframes (seq_id=0)
+[2026-01-28 02:57:14] INFO: Processing 1101 scans from kitti_01...
+[2026-01-28 02:57:14] INFO:   Scan 0/1101 | Keyframes: 0 | Avg: load=0.0ms, encode=0.0ms, select=0.0ms
+[2026-01-28 02:57:43] INFO:   Scan 500/1101 | Keyframes: 500 | Avg: load=28.4ms, encode=23.3ms, select=0.2ms
+[2026-01-28 02:58:11] INFO:   Scan 1000/1101 | Keyframes: 1000 | Avg: load=29.9ms, encode=27.1ms, select=0.2ms
+[2026-01-28 02:58:17] INFO:   Completed: 1101/1101 keyframes (100.0% selection rate)
+[2026-01-28 02:58:17] INFO:     Sequence 01: 1101 keyframes (seq_id=1)
+[2026-01-28 02:58:17] INFO: Processing 4661 scans from kitti_02...
+[2026-01-28 02:58:17] INFO:   Scan 0/4661 | Keyframes: 0 | Avg: load=0.0ms, encode=0.0ms, select=0.0ms
+[2026-01-28 02:58:23] INFO:   Scan 500/4661 | Keyframes: 500 | Avg: load=0.9ms, encode=10.4ms, select=0.7ms
+[2026-01-28 02:58:30] INFO:   Scan 1000/4661 | Keyframes: 1000 | Avg: load=0.9ms, encode=10.1ms, select=9.1ms
+[2026-01-28 02:58:39] INFO:   Scan 1500/4661 | Keyframes: 1500 | Avg: load=0.9ms, encode=10.0ms, select=0.1ms
+[2026-01-28 02:58:46] INFO:   Scan 2000/4661 | Keyframes: 2000 | Avg: load=0.9ms, encode=10.3ms, select=3.5ms
+[2026-01-28 02:58:52] INFO:   Scan 2500/4661 | Keyframes: 2500 | Avg: load=0.9ms, encode=10.2ms, select=0.1ms
+[2026-01-28 02:58:59] INFO:   Scan 3000/4661 | Keyframes: 3000 | Avg: load=0.9ms, encode=10.1ms, select=0.1ms
+[2026-01-28 02:59:07] INFO:   Scan 3500/4661 | Keyframes: 3500 | Avg: load=0.9ms, encode=10.4ms, select=4.8ms
+[2026-01-28 02:59:13] INFO:   Scan 4000/4661 | Keyframes: 4000 | Avg: load=0.9ms, encode=10.1ms, select=0.1ms
+[2026-01-28 02:59:20] INFO:   Scan 4500/4661 | Keyframes: 4500 | Avg: load=0.9ms, encode=10.5ms, select=0.1ms
+[2026-01-28 02:59:22] INFO:   Completed: 4661/4661 keyframes (100.0% selection rate)
+[2026-01-28 02:59:22] INFO:     Sequence 02: 4661 keyframes (seq_id=2)
+[2026-01-28 02:59:22] INFO: Processing 801 scans from kitti_03...
+[2026-01-28 02:59:22] INFO:   Scan 0/801 | Keyframes: 0 | Avg: load=0.0ms, encode=0.0ms, select=0.0ms
+[2026-01-28 02:59:53] INFO:   Scan 500/801 | Keyframes: 500 | Avg: load=24.6ms, encode=26.4ms, select=5.6ms
+[2026-01-28 03:00:12] INFO:   Completed: 801/801 keyframes (100.0% selection rate)
+[2026-01-28 03:00:12] INFO:     Sequence 03: 801 keyframes (seq_id=3)
+[2026-01-28 03:00:12] INFO: Processing 271 scans from kitti_04...
+[2026-01-28 03:00:12] INFO:   Scan 0/271 | Keyframes: 0 | Avg: load=0.0ms, encode=0.0ms, select=0.0ms
+[2026-01-28 03:00:27] INFO:   Completed: 271/271 keyframes (100.0% selection rate)
+[2026-01-28 03:00:27] INFO:     Sequence 04: 271 keyframes (seq_id=4)
+[2026-01-28 03:00:27] INFO: Processing 2761 scans from kitti_05...
+[2026-01-28 03:00:27] INFO:   Scan 0/2761 | Keyframes: 0 | Avg: load=0.0ms, encode=0.0ms, select=0.0ms
+[2026-01-28 03:00:38] INFO:   Scan 500/2761 | Keyframes: 500 | Avg: load=0.9ms, encode=9.8ms, select=11.9ms
+[2026-01-28 03:00:49] INFO:   Scan 1000/2761 | Keyframes: 1000 | Avg: load=0.9ms, encode=10.1ms, select=13.7ms
+[2026-01-28 03:00:59] INFO:   Scan 1500/2761 | Keyframes: 1500 | Avg: load=0.9ms, encode=10.4ms, select=0.3ms
+[2026-01-28 03:01:07] INFO:   Scan 2000/2761 | Keyframes: 2000 | Avg: load=0.8ms, encode=9.8ms, select=0.1ms
+[2026-01-28 03:01:17] INFO:   Scan 2500/2761 | Keyframes: 2500 | Avg: load=0.9ms, encode=9.7ms, select=6.5ms
+[2026-01-28 03:01:20] INFO:   Completed: 2761/2761 keyframes (100.0% selection rate)
+[2026-01-28 03:01:20] INFO:     Sequence 05: 2761 keyframes (seq_id=5)
+[2026-01-28 03:01:20] INFO: Processing 1101 scans from kitti_06...
+[2026-01-28 03:01:20] INFO:   Scan 0/1101 | Keyframes: 0 | Avg: load=0.0ms, encode=0.0ms, select=0.0ms
+[2026-01-28 03:01:28] INFO:   Scan 500/1101 | Keyframes: 500 | Avg: load=0.9ms, encode=9.4ms, select=5.3ms
+[2026-01-28 03:01:34] INFO:   Scan 1000/1101 | Keyframes: 1000 | Avg: load=0.9ms, encode=10.0ms, select=0.1ms
+[2026-01-28 03:01:36] INFO:   Completed: 1101/1101 keyframes (100.0% selection rate)
+[2026-01-28 03:01:36] INFO:     Sequence 06: 1101 keyframes (seq_id=6)
+[2026-01-28 03:01:36] INFO: Processing 1101 scans from kitti_07...
+[2026-01-28 03:01:36] INFO:   Scan 0/1101 | Keyframes: 0 | Avg: load=0.0ms, encode=0.0ms, select=0.0ms
+[2026-01-28 03:01:48] INFO:   Scan 500/1101 | Keyframes: 500 | Avg: load=0.9ms, encode=9.9ms, select=12.9ms
+[2026-01-28 03:01:58] INFO:   Scan 1000/1101 | Keyframes: 1000 | Avg: load=0.9ms, encode=9.4ms, select=19.3ms
+[2026-01-28 03:02:01] INFO:   Completed: 1101/1101 keyframes (100.0% selection rate)
+[2026-01-28 03:02:01] INFO:     Sequence 07: 1101 keyframes (seq_id=7)
+[2026-01-28 03:02:01] INFO: Processing 4071 scans from kitti_08...
+[2026-01-28 03:02:01] INFO:   Scan 0/4071 | Keyframes: 0 | Avg: load=0.0ms, encode=0.0ms, select=0.0ms
+[2026-01-28 03:02:10] INFO:   Scan 500/4071 | Keyframes: 500 | Avg: load=0.9ms, encode=10.0ms, select=10.8ms
+[2026-01-28 03:02:18] INFO:   Scan 1000/4071 | Keyframes: 1000 | Avg: load=0.9ms, encode=9.9ms, select=4.0ms
+[2026-01-28 03:02:29] INFO:   Scan 1500/4071 | Keyframes: 1500 | Avg: load=0.9ms, encode=10.0ms, select=12.4ms
+[2026-01-28 03:02:39] INFO:   Scan 2000/4071 | Keyframes: 2000 | Avg: load=0.9ms, encode=9.3ms, select=18.3ms
+[2026-01-28 03:02:52] INFO:   Scan 2500/4071 | Keyframes: 2500 | Avg: load=1.2ms, encode=9.7ms, select=13.7ms
+[2026-01-28 03:03:01] INFO:   Scan 3000/4071 | Keyframes: 3000 | Avg: load=0.8ms, encode=8.9ms, select=12.5ms
+[2026-01-28 03:03:08] INFO:   Scan 3500/4071 | Keyframes: 3500 | Avg: load=0.9ms, encode=9.3ms, select=13.0ms
+[2026-01-28 03:03:16] INFO:   Scan 4000/4071 | Keyframes: 4000 | Avg: load=0.9ms, encode=9.1ms, select=8.1ms
+[2026-01-28 03:03:18] INFO:   Completed: 4071/4071 keyframes (100.0% selection rate)
+[2026-01-28 03:03:18] INFO:     Sequence 08: 4071 keyframes (seq_id=8)
+[2026-01-28 03:03:18] INFO:   Loading NCLT from /workspace/data/nclt
+[2026-01-28 03:03:23] INFO: Processing 28127 scans from nclt_2012-01-08...
+[2026-01-28 03:03:23] INFO:   Scan 0/28127 | Keyframes: 0 | Avg: load=0.0ms, encode=0.0ms, select=0.0ms
+[2026-01-28 03:03:34] INFO:   Scan 500/28127 | Keyframes: 500 | Avg: load=1.9ms, encode=2.3ms, select=17.1ms
+[2026-01-28 03:03:46] INFO:   Scan 1000/28127 | Keyframes: 1000 | Avg: load=2.8ms, encode=2.8ms, select=18.2ms
+[2026-01-28 03:03:57] INFO:   Scan 1500/28127 | Keyframes: 1500 | Avg: load=2.5ms, encode=3.1ms, select=18.2ms
+[2026-01-28 03:04:12] INFO:   Scan 2000/28127 | Keyframes: 2000 | Avg: load=4.2ms, encode=3.7ms, select=18.8ms
+[2026-01-28 03:04:23] INFO:   Scan 2500/28127 | Keyframes: 2500 | Avg: load=1.7ms, encode=2.7ms, select=18.1ms
+[2026-01-28 03:04:35] INFO:   Scan 3000/28127 | Keyframes: 3000 | Avg: load=2.1ms, encode=3.3ms, select=18.2ms
+[2026-01-28 03:04:47] INFO:   Scan 3500/28127 | Keyframes: 3500 | Avg: load=1.7ms, encode=2.9ms, select=17.8ms
+[2026-01-28 03:04:58] INFO:   Scan 4000/28127 | Keyframes: 4000 | Avg: load=1.4ms, encode=2.5ms, select=17.3ms
+[2026-01-28 03:05:09] INFO:   Scan 4500/28127 | Keyframes: 4500 | Avg: load=1.4ms, encode=2.6ms, select=17.6ms
+[2026-01-28 03:05:19] INFO:   Scan 5000/28127 | Keyframes: 5000 | Avg: load=1.6ms, encode=2.4ms, select=16.7ms
+[2026-01-28 03:05:37] INFO:   Scan 5500/28127 | Keyframes: 5500 | Avg: load=8.7ms, encode=3.2ms, select=18.0ms
+[2026-01-28 03:05:52] INFO:   Scan 6000/28127 | Keyframes: 6000 | Avg: load=6.7ms, encode=2.9ms, select=19.1ms
+[2026-01-28 03:06:06] INFO:   Scan 6500/28127 | Keyframes: 6500 | Avg: load=6.5ms, encode=2.5ms, select=17.1ms
+[2026-01-28 03:06:19] INFO:   Scan 7000/28127 | Keyframes: 7000 | Avg: load=6.3ms, encode=2.5ms, select=17.2ms
+[2026-01-28 03:06:33] INFO:   Scan 7500/28127 | Keyframes: 7500 | Avg: load=7.9ms, encode=2.5ms, select=17.4ms
+[2026-01-28 03:06:46] INFO:   Scan 8000/28127 | Keyframes: 8000 | Avg: load=9.1ms, encode=3.1ms, select=18.0ms
+[2026-01-28 03:07:01] INFO:   Scan 8500/28127 | Keyframes: 8500 | Avg: load=8.4ms, encode=3.2ms, select=18.5ms
+[2026-01-28 03:07:16] INFO:   Scan 9000/28127 | Keyframes: 9000 | Avg: load=9.2ms, encode=3.2ms, select=19.3ms
+[2026-01-28 03:07:31] INFO:   Scan 9500/28127 | Keyframes: 9500 | Avg: load=8.2ms, encode=3.2ms, select=18.3ms
+[2026-01-28 03:07:47] INFO:   Scan 10000/28127 | Keyframes: 10000 | Avg: load=10.8ms, encode=3.5ms, select=18.8ms
+[2026-01-28 03:08:04] INFO:   Scan 10500/28127 | Keyframes: 10500 | Avg: load=12.3ms, encode=3.6ms, select=19.3ms
+[2026-01-28 03:08:19] INFO:   Scan 11000/28127 | Keyframes: 11000 | Avg: load=7.8ms, encode=2.8ms, select=17.6ms
+[2026-01-28 03:08:33] INFO:   Scan 11500/28127 | Keyframes: 11500 | Avg: load=6.3ms, encode=2.8ms, select=17.9ms
+[2026-01-28 03:08:47] INFO:   Scan 12000/28127 | Keyframes: 12000 | Avg: load=8.5ms, encode=2.7ms, select=17.3ms

@@ -1,0 +1,135 @@
+@page {
+    size: A4;
+    margin: 15mm;
+}
+
+body {
+    font-family: 'Noto Sans CJK KR', 'Noto Sans KR', 'NanumGothic', 'Malgun Gothic', sans-serif;
+    font-size: 10pt;
+    line-height: 1.5;
+    color: #333;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Noto Sans CJK KR', 'Noto Sans KR', 'NanumGothic', sans-serif;
+    font-weight: 700;
+    margin-top: 1.2em;
+    margin-bottom: 0.4em;
+    page-break-after: avoid;
+}
+
+h1 {
+    font-size: 20pt;
+    border-bottom: 2px solid #333;
+    padding-bottom: 8px;
+}
+
+h2 {
+    font-size: 16pt;
+    border-bottom: 1px solid #666;
+    padding-bottom: 4px;
+}
+
+h3 {
+    font-size: 13pt;
+}
+
+h4 {
+    font-size: 11pt;
+}
+
+p {
+    margin: 0.6em 0;
+}
+
+code {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    background-color: #f4f4f4;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 0.85em;
+    word-break: break-all;
+}
+
+pre {
+    background-color: #f4f4f4;
+    padding: 10px;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-size: 8pt;
+    line-height: 1.3;
+    page-break-inside: avoid;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+pre code {
+    background-color: transparent;
+    padding: 0;
+}
+
+/* 테이블 스타일 - 핵심 수정 */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.8em 0;
+    font-size: 9pt;
+    page-break-inside: avoid;
+    table-layout: fixed;
+}
+
+th, td {
+    border: 1px solid #ccc;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+th {
+    background-color: #f0f0f0;
+    font-weight: 700;
+}
+
+tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+/* 테이블 컬럼 너비 조정 */
+table td:first-child,
+table th:first-child {
+    width: 20%;
+}
+
+blockquote {
+    border-left: 3px solid #ddd;
+    margin: 0.8em 0;
+    padding: 0.4em 0.8em;
+    background-color: #f9f9f9;
+    font-size: 9pt;
+}
+
+hr {
+    border: none;
+    border-top: 1px solid #ddd;
+    margin: 1.5em 0;
+}
+
+ul, ol {
+    margin: 0.4em 0;
+    padding-left: 1.5em;
+}
+
+li {
+    margin: 0.2em 0;
+}
+
+strong {
+    font-weight: 700;
+}
+
+/* 체크박스 리스트 */
+li input[type="checkbox"] {
+    margin-right: 0.5em;
+}

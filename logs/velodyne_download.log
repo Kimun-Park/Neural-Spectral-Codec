@@ -1,0 +1,35 @@
+============================================================
+HeLiPR Velodyne-Only Downloader
+============================================================
+Delay after each file: 120s
+Delay on rate limit: 600s
+Delay between sequences: 300s
+
+Current status:
+  Town01: COMPLETE
+  Town02: PENDING
+  Town03: PENDING
+  Roundabout01: COMPLETE
+  Roundabout02: PENDING
+  Roundabout03: PENDING
+  Bridge01: PENDING
+  Bridge02: PENDING
+  Bridge03: PENDING
+  Bridge04: PENDING
+  KAIST04: PENDING
+  KAIST05: PENDING
+  KAIST06: PENDING
+  DCC04: PENDING
+  DCC05: PENDING
+  DCC06: PENDING
+  Riverside04: PENDING
+  Riverside05: PENDING
+  Riverside06: PENDING
+
+
+============================================================
+Sequence: Roundabout02
+============================================================
+  Getting file IDs from folder...
+  ERROR: Could not find Velodyne.tar.gz file ID
+  Failed! Waiting 600s...

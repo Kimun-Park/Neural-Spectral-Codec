@@ -1,0 +1,41 @@
+[2026-01-27 04:43:39] INFO: ================================================================================
+[2026-01-27 04:43:39] INFO: NEURAL SPECTRAL CODEC - MULTI-DATASET TRAINING
+[2026-01-27 04:43:39] INFO: ================================================================================
+[2026-01-27 04:43:39] INFO: Log file: logs/training_20260127_044339.log
+[2026-01-27 04:43:39] INFO: Loading configuration from: configs/training_helipr_to_kitti.yaml
+[2026-01-27 04:43:39] INFO:   n_elevation: 16
+[2026-01-27 04:43:39] INFO:   n_azimuth: 360
+[2026-01-27 04:43:39] INFO:   n_bins: 50
+[2026-01-27 04:43:39] INFO:   distance_threshold: 0.8m
+[2026-01-27 04:43:39] INFO:   n_epochs: 50
+[2026-01-27 04:43:39] INFO: Using device: cpu
+[2026-01-27 04:43:39] INFO: 
+[2026-01-27 04:43:39] INFO: [1/6] Creating spectral encoder...
+[2026-01-27 04:43:40] INFO:   Encoder created (n_elevation=16, n_bins=50)
+[2026-01-27 04:43:40] INFO: 
+[2026-01-27 04:43:40] INFO: [2/6] Loading training datasets...
+[2026-01-27 04:43:40] INFO:   Loading HELIPR from /workspace/data/helipr
+[2026-01-27 04:43:40] INFO: Processing 23935 scans from helipr_Town01...
+[2026-01-27 04:43:40] INFO:   Scan 0/23935 | Keyframes: 0 | Avg: load=0.0ms, encode=0.0ms, select=0.0ms
+[2026-01-27 04:43:49] INFO:   Scan 500/23935 | Keyframes: 500 | Avg: load=0.6ms, encode=2.0ms, select=14.3ms
+[2026-01-27 04:43:57] INFO:   Scan 1000/23935 | Keyframes: 1000 | Avg: load=0.6ms, encode=2.0ms, select=14.4ms
+[2026-01-27 04:44:05] INFO:   Scan 1500/23935 | Keyframes: 1500 | Avg: load=0.5ms, encode=1.9ms, select=14.3ms
+[2026-01-27 04:44:14] INFO:   Scan 2000/23935 | Keyframes: 2000 | Avg: load=0.5ms, encode=1.9ms, select=14.2ms
+[2026-01-27 04:44:22] INFO:   Scan 2500/23935 | Keyframes: 2500 | Avg: load=0.5ms, encode=2.0ms, select=14.9ms
+[2026-01-27 04:44:31] INFO:   Scan 3000/23935 | Keyframes: 3000 | Avg: load=0.5ms, encode=1.9ms, select=14.2ms
+[2026-01-27 04:44:37] INFO:   Scan 3500/23935 | Keyframes: 3500 | Avg: load=0.4ms, encode=1.7ms, select=0.1ms
+[2026-01-27 04:44:42] INFO:   Scan 4000/23935 | Keyframes: 4000 | Avg: load=0.5ms, encode=1.8ms, select=14.2ms
+[2026-01-27 04:44:50] INFO:   Scan 4500/23935 | Keyframes: 4500 | Avg: load=0.4ms, encode=1.7ms, select=14.3ms
+[2026-01-27 04:44:58] INFO:   Scan 5000/23935 | Keyframes: 5000 | Avg: load=0.4ms, encode=1.7ms, select=14.2ms
+[2026-01-27 04:45:04] INFO:   Scan 5500/23935 | Keyframes: 5500 | Avg: load=0.5ms, encode=1.8ms, select=0.1ms
+[2026-01-27 04:45:09] INFO:   Scan 6000/23935 | Keyframes: 6000 | Avg: load=1.6ms, encode=2.2ms, select=2.4ms
+[2026-01-27 04:45:13] INFO:   Scan 6500/23935 | Keyframes: 6500 | Avg: load=1.3ms, encode=1.9ms, select=0.1ms
+[2026-01-27 04:45:21] INFO:   Scan 7000/23935 | Keyframes: 7000 | Avg: load=1.3ms, encode=2.0ms, select=14.9ms
+[2026-01-27 04:45:28] INFO:   Scan 7500/23935 | Keyframes: 7500 | Avg: load=1.0ms, encode=2.0ms, select=0.1ms
+[2026-01-27 04:45:36] INFO:   Scan 8000/23935 | Keyframes: 8000 | Avg: load=1.1ms, encode=1.9ms, select=14.3ms
+[2026-01-27 04:45:45] INFO:   Scan 8500/23935 | Keyframes: 8500 | Avg: load=1.4ms, encode=2.1ms, select=14.2ms
+[2026-01-27 04:45:54] INFO:   Scan 9000/23935 | Keyframes: 9000 | Avg: load=1.7ms, encode=2.0ms, select=13.7ms
+[2026-01-27 04:46:03] INFO:   Scan 9500/23935 | Keyframes: 9500 | Avg: load=1.7ms, encode=1.9ms, select=14.2ms
+[2026-01-27 04:46:11] INFO:   Scan 10000/23935 | Keyframes: 10000 | Avg: load=1.3ms, encode=2.0ms, select=14.3ms
+[2026-01-27 04:46:20] INFO:   Scan 10500/23935 | Keyframes: 10500 | Avg: load=1.6ms, encode=2.2ms, select=13.7ms
+[2026-01-27 04:46:29] INFO:   Scan 11000/23935 | Keyframes: 11000 | Avg: load=1.3ms, encode=2.1ms, select=13.1ms
