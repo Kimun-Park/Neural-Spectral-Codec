@@ -13,6 +13,7 @@ build/
 logs/
 outputs/
 checkpoints/
+docs/
 *.pth
 *.pt
 
