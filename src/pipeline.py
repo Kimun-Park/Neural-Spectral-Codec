@@ -29,6 +29,8 @@ from typing import List, Dict, Optional
 import time
 
 from data.kitti_loader import KITTILoader
+from data.nclt_loader import NCLTLoader
+from data.multi_dataset_loader import MultiDatasetLoader, create_multi_dataset_loader
 from encoding.spectral_encoder import SpectralEncoder
 from encoding.quantization import compress_descriptor, decompress_descriptor
 from keyframe.selector import KeyframeSelector, Keyframe
@@ -66,7 +68,8 @@ class NeuralSpectralCodecPipeline:
             n_azimuth=self.config['encoding']['n_azimuth'],
             n_bins=self.config['encoding']['n_bins'],
             alpha=self.config['encoding']['alpha'],
-            learnable_alpha=self.config['encoding']['learnable_alpha']
+            learnable_alpha=self.config['encoding']['learnable_alpha'],
+            target_elevation_bins=self.config['encoding']['target_elevation_bins']
         ).to(self.device)
 
         self.keyframe_selector = KeyframeSelector(
@@ -117,7 +120,8 @@ class NeuralSpectralCodecPipeline:
         # Phase 1: Load and preprocess training data
         print("\n[Phase 1/4] Loading and preprocessing training data...")
         train_keyframes, train_poses, train_descriptors = self._load_and_process_sequences(
-            sequences_train
+            sequences_train,
+            mode='train'
         )
 
         print(f"Training keyframes: {len(train_keyframes)}")
@@ -135,7 +139,8 @@ class NeuralSpectralCodecPipeline:
         # Phase 3: Load validation data
         print("\n[Phase 3/4] Loading validation data...")
         val_keyframes, val_poses, val_descriptors = self._load_and_process_sequences(
-            sequences_val
+            sequences_val,
+            mode='val'
         )
 
         val_graph = build_graph_from_keyframes(
@@ -165,7 +170,9 @@ class NeuralSpectralCodecPipeline:
             model=self.gnn,
             device=self.device,
             learning_rate=self.config.get('training', {}).get('learning_rate', 5e-4),
-            checkpoint_dir=self.config['system']['checkpoint_dir']
+            checkpoint_dir=self.config['system']['checkpoint_dir'],
+            use_multi_gpu=self.config['gnn']['use_multi_gpu'],
+            patience=self.config['gnn']['patience']
         )
 
         # Create triplet miner
@@ -276,13 +283,15 @@ class NeuralSpectralCodecPipeline:
 
     def _load_and_process_sequences(
         self,
-        sequence_ids: List[int]
+        sequence_ids: List[int],
+        mode: str = 'train'
     ) -> tuple:
         """
-        Load and process KITTI sequences
+        Load and process sequences from datasets
 
         Args:
-            sequence_ids: List of sequence IDs to load
+            sequence_ids: List of sequence IDs to load (for backward compatibility)
+            mode: 'train', 'val', or 'test'
 
         Returns:
             keyframes: List of keyframes
@@ -291,40 +300,62 @@ class NeuralSpectralCodecPipeline:
         """
         all_keyframes = []
 
-        for seq_id in sequence_ids:
-            print(f"Processing sequence {seq_id:02d}...")
+        # Load dataset (supports both single and multi-dataset)
+        # For backward compatibility, check if sequence_ids is provided
+        if 'datasets' in self.config['data']:
+            # Multi-dataset mode
+            loader = create_multi_dataset_loader(self.config, mode=mode)
+            sequence_name = f"multi-dataset ({mode})"
+        else:
+            # Single dataset mode (backward compatibility)
+            if len(sequence_ids) == 1:
+                loader = KITTILoader(
+                    data_root=self.config['data']['kitti_root'],
+                    sequence=f"{sequence_ids[0]:02d}",
+                    lazy_load=True
+                )
+                sequence_name = f"sequence {sequence_ids[0]:02d}"
+            else:
+                # Multiple KITTI sequences
+                datasets_config = [{
+                    'type': 'kitti',
+                    'root': self.config['data']['kitti_root'],
+                    'sequences': [f"{s:02d}" for s in sequence_ids],
+                    'weight': 1.0
+                }]
+                loader = MultiDatasetLoader(datasets_config, lazy_load=True)
+                sequence_name = "multi-sequence"
 
-            # Load sequence
-            kitti_loader = KITTILoader(
-                data_root=self.config['data']['kitti_root'],
-                sequence=f"{seq_id:02d}",
-                lazy_load=True
+        print(f"Processing {sequence_name}...")
+
+        # Reset selector
+        self.keyframe_selector.reset()
+
+        # Process all scans
+        total_scans = len(loader)
+        for scan_id in range(total_scans):
+            if scan_id % 100 == 0:
+                print(f"  Processing scan {scan_id}/{total_scans}...")
+
+            data = loader[scan_id]
+
+            selected, keyframe, _ = self.keyframe_selector.process_scan(
+                scan_id=scan_id,
+                points=data['points'],
+                pose=data['pose'],
+                timestamp=data['timestamp']
             )
 
-            # Reset selector for each sequence
-            self.keyframe_selector.reset()
+            if selected:
+                # Encode descriptor
+                descriptor = self.encoder.encode_points(data['points']).detach().cpu().numpy()
+                keyframe.descriptor = descriptor
 
-            # Process all scans
-            for scan_id in range(len(kitti_loader)):
-                data = kitti_loader[scan_id]
+                all_keyframes.append(keyframe)
 
-                selected, keyframe, _ = self.keyframe_selector.process_scan(
-                    scan_id=scan_id,
-                    points=data['points'],
-                    pose=data['pose'],
-                    timestamp=data['timestamp']
-                )
-
-                if selected:
-                    # Encode descriptor
-                    descriptor = self.encoder.encode_points(data['points']).detach().cpu().numpy()
-                    keyframe.descriptor = descriptor
-
-                    all_keyframes.append(keyframe)
-
-            stats = self.keyframe_selector.get_statistics()
-            print(f"  Selected {stats['num_keyframes']} keyframes from {stats['num_scans']} scans "
-                  f"({stats['compression_ratio']:.1f}x compression)")
+        stats = self.keyframe_selector.get_statistics()
+        print(f"  Selected {stats['num_keyframes']} keyframes from {stats['num_scans']} scans "
+              f"({stats['compression_ratio']:.1f}x compression)")
 
         # Extract poses and descriptors
         poses = np.array([kf.pose for kf in all_keyframes])

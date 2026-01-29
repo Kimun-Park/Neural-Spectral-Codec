@@ -4,11 +4,12 @@ Spectral Histogram Encoder - Algorithm 1
 Implements the core Neural Spectral Codec algorithm:
 1. Convert point cloud to panoramic range image (64 × 360)
 2. Apply ring-wise 1D FFT along azimuth for rotation invariance
-3. Aggregate FFT magnitudes into 50-bin histogram via exponential binning
+3. Aggregate FFT magnitudes into per-elevation histograms via exponential binning
 4. Normalize and prepare for quantization
 
 Key features:
 - Rotation invariance via magnitude spectrum (phase discarded)
+- Per-elevation histogram preserves height information (16 × 50 = 800D)
 - Adaptive exponential frequency binning (learnable α parameter)
 - Numerical stability via proper normalization
 """
@@ -17,14 +18,18 @@ import numpy as np
 import torch
 import torch.nn as nn
 from typing import Tuple, Optional
-from encoding.range_image import RangeImageProjector
+from encoding.range_image import RangeImageProjector, interpolate_range_image
 
 
 class SpectralEncoder(nn.Module):
     """
     Neural Spectral Histogram Encoder
 
-    Compresses LiDAR point clouds to 50-dimensional spectral histograms.
+    Compresses LiDAR point clouds to per-elevation spectral histograms.
+    Output dimension: target_elevation_bins × n_bins (e.g., 16 × 50 = 800D)
+
+    This preserves height-specific spectral information for better
+    cross-sensor generalization.
     """
 
     def __init__(
@@ -34,7 +39,11 @@ class SpectralEncoder(nn.Module):
         n_bins: int = 50,
         alpha: float = 2.0,
         learnable_alpha: bool = True,
-        epsilon: float = 1e-8
+        epsilon: float = 1e-8,
+        target_elevation_bins: int = 16,
+        interpolate_empty: bool = True,
+        elevation_range: tuple = (-24.8, 2.0),
+        device: str = 'cpu'
     ):
         """
         Initialize spectral encoder
@@ -46,6 +55,10 @@ class SpectralEncoder(nn.Module):
             alpha: Exponential warping parameter for frequency binning
             learnable_alpha: If True, α is learned during training
             epsilon: Small constant for numerical stability
+            target_elevation_bins: Target elevation bins for sensor-agnostic binning (16 for compatibility)
+            interpolate_empty: If True, interpolate empty pixels before FFT (critical for sensor invariance)
+            elevation_range: (min, max) elevation angles in degrees (sensor-specific)
+            device: Device for tensor operations
         """
         super().__init__()
 
@@ -53,6 +66,9 @@ class SpectralEncoder(nn.Module):
         self.n_azimuth = n_azimuth
         self.n_bins = n_bins
         self.epsilon = epsilon
+        self.target_elevation_bins = target_elevation_bins
+        self.interpolate_empty = interpolate_empty
+        self._device = device
 
         # Learnable alpha parameter
         if learnable_alpha:
@@ -60,15 +76,19 @@ class SpectralEncoder(nn.Module):
         else:
             self.register_buffer('alpha', torch.tensor(alpha, dtype=torch.float32))
 
-        # Range image projector
+        # Range image projector with sensor-specific elevation range
         self.projector = RangeImageProjector(
             n_elevation=n_elevation,
-            n_azimuth=n_azimuth
+            n_azimuth=n_azimuth,
+            elevation_range=elevation_range
         )
 
         # Precompute number of FFT frequencies
         # Real FFT outputs (n_azimuth // 2 + 1) frequencies
         self.n_freqs = n_azimuth // 2 + 1  # 181 for 360 azimuth bins
+
+        # Output dimension: per-elevation histograms
+        self.output_dim = target_elevation_bins * n_bins  # 16 * 50 = 800
 
     def _compute_bin_edges(self, alpha: torch.Tensor) -> torch.Tensor:
         """
@@ -101,52 +121,66 @@ class SpectralEncoder(nn.Module):
         bin_edges: torch.Tensor
     ) -> torch.Tensor:
         """
-        Bin FFT magnitudes into histogram using adaptive edges
+        Bin FFT magnitudes into per-elevation histograms using adaptive edges
 
         Args:
             fft_magnitudes: (n_elevation, n_freqs) FFT magnitude spectrum
             bin_edges: (n_bins + 1,) bin edges in frequency space
 
         Returns:
-            (n_bins,) histogram of aggregated magnitudes
+            (n_elevation * n_bins,) flattened per-elevation histograms
         """
-        # Frequency indices
+        n_elevation = fft_magnitudes.shape[0]
+
+        # Frequency indices: (n_freqs,)
         freq_indices = torch.arange(
             self.n_freqs,
             dtype=torch.float32,
             device=fft_magnitudes.device
         )
 
-        # Initialize histogram
-        histogram = torch.zeros(self.n_bins, device=fft_magnitudes.device)
+        # Assign each frequency to a bin using searchsorted (vectorized)
+        # bin_assignments[j] = i means frequency j belongs to bin i
+        bin_assignments = torch.searchsorted(bin_edges, freq_indices, right=True) - 1
+        bin_assignments = torch.clamp(bin_assignments, 0, self.n_bins - 1)
 
-        # Aggregate magnitudes into bins
-        for i in range(self.n_bins):
-            # Find frequencies in this bin
-            mask = (freq_indices >= bin_edges[i]) & (freq_indices < bin_edges[i + 1])
+        # Create per-elevation histograms
+        # fft_magnitudes: (n_elevation, n_freqs)
+        histograms = torch.zeros(n_elevation, self.n_bins, device=fft_magnitudes.device)
 
-            if mask.any():
-                # Sum magnitudes across all elevation rings for frequencies in this bin
-                histogram[i] = fft_magnitudes[:, mask].sum()
+        # Scatter add for each elevation
+        for elev_idx in range(n_elevation):
+            histograms[elev_idx].scatter_add_(
+                0, bin_assignments.long(), fft_magnitudes[elev_idx]
+            )
 
-        return histogram
+        # Flatten to (n_elevation * n_bins,)
+        return histograms.flatten()
 
     def encode_range_image(self, range_image: torch.Tensor) -> torch.Tensor:
         """
-        Encode range image to spectral histogram
+        Encode range image to per-elevation spectral histogram
 
         Args:
             range_image: (n_elevation, n_azimuth) range values
 
         Returns:
-            (n_bins,) normalized spectral histogram
+            (target_elevation_bins * n_bins,) globally normalized per-elevation histogram
         """
+        # Sensor-agnostic elevation binning
+        if range_image.shape[0] != self.target_elevation_bins:
+            # Adaptive average pooling to normalize elevation dimension
+            range_image = torch.nn.functional.adaptive_avg_pool2d(
+                range_image.unsqueeze(0).unsqueeze(0),
+                (self.target_elevation_bins, range_image.shape[1])
+            ).squeeze()
+
         # Apply ring-wise 1D FFT along azimuth dimension
         # FFT along last dimension (azimuth)
         fft_output = torch.fft.rfft(range_image, dim=1, norm='ortho')
 
         # Take magnitude (discard phase for rotation invariance)
-        fft_magnitudes = torch.abs(fft_output)  # (n_elevation, n_freqs)
+        fft_magnitudes = torch.abs(fft_output)  # (target_elevation_bins, n_freqs)
 
         # Normalize by sqrt(n_azimuth) to maintain scale
         fft_magnitudes = fft_magnitudes * np.sqrt(self.n_azimuth)
@@ -154,16 +188,18 @@ class SpectralEncoder(nn.Module):
         # Compute adaptive bin edges
         bin_edges = self._compute_bin_edges(self.alpha)
 
-        # Bin FFT magnitudes into histogram
+        # Bin FFT magnitudes into per-elevation histograms
         histogram = self._bin_fft_magnitudes(fft_magnitudes, bin_edges)
+        # histogram shape: (target_elevation_bins * n_bins,)
 
-        # Normalize histogram to sum to 1
+        # Global normalization: entire histogram sums to 1
+        # This preserves relative point density between elevations
         histogram_sum = histogram.sum()
         if histogram_sum > self.epsilon:
             histogram = histogram / (histogram_sum + self.epsilon)
         else:
             # Empty histogram - uniform distribution
-            histogram = torch.ones(self.n_bins, device=histogram.device) / self.n_bins
+            histogram = torch.ones_like(histogram) / histogram.numel()
 
         return histogram
 
@@ -180,8 +216,12 @@ class SpectralEncoder(nn.Module):
         # Project to range image
         range_image, _ = self.projector.project(points, keep_intensity=False)
 
-        # Convert to torch tensor
-        range_image_tensor = torch.from_numpy(range_image).float()
+        # Interpolate empty pixels for sensor-invariant FFT
+        if self.interpolate_empty:
+            range_image = interpolate_range_image(range_image, method='linear')
+
+        # Convert to torch tensor and move to same device as model
+        range_image_tensor = torch.from_numpy(range_image).float().to(self.alpha.device)
 
         # Encode
         histogram = self.encode_range_image(range_image_tensor)
@@ -196,7 +236,8 @@ class SpectralEncoder(nn.Module):
             x: (batch, n_elevation, n_azimuth) batch of range images
 
         Returns:
-            (batch, n_bins) batch of spectral histograms
+            (batch, output_dim) batch of per-elevation spectral histograms
+            where output_dim = target_elevation_bins * n_bins (e.g., 800)
         """
         batch_size = x.shape[0]
         histograms = []

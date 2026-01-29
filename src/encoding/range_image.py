@@ -9,6 +9,84 @@ following the KITTI HDL-64E specifications:
 
 import numpy as np
 from typing import Tuple, Optional
+from scipy import ndimage
+
+
+def interpolate_range_image(range_image: np.ndarray, method: str = 'linear') -> np.ndarray:
+    """
+    Interpolate empty pixels (zeros) in range image.
+
+    This is critical for sensor-invariant FFT-based descriptors.
+    Empty pixels cause FFT distortion - same place with different sensor
+    density produces completely different frequency responses.
+
+    Args:
+        range_image: (n_elevation, n_azimuth) range image with 0 for empty pixels
+        method: 'linear' (azimuth direction) or 'nearest'
+
+    Returns:
+        Interpolated range image with no empty pixels
+    """
+    result = range_image.copy()
+    n_elevation, n_azimuth = range_image.shape
+
+    for row in range(n_elevation):
+        row_data = result[row]
+        valid_mask = row_data > 0
+
+        if not np.any(valid_mask):
+            # Completely empty row - skip or use neighbor rows
+            continue
+
+        if np.all(valid_mask):
+            # No interpolation needed
+            continue
+
+        # Get valid indices and values
+        valid_indices = np.where(valid_mask)[0]
+        valid_values = row_data[valid_mask]
+
+        # Get invalid indices
+        invalid_indices = np.where(~valid_mask)[0]
+
+        if method == 'linear':
+            # Circular linear interpolation (azimuth wraps around)
+            # Extend valid data for circular boundary handling
+            extended_indices = np.concatenate([
+                valid_indices - n_azimuth,
+                valid_indices,
+                valid_indices + n_azimuth
+            ])
+            extended_values = np.tile(valid_values, 3)
+
+            # Interpolate
+            interpolated = np.interp(invalid_indices, extended_indices, extended_values)
+            result[row, invalid_indices] = interpolated
+
+        elif method == 'nearest':
+            # Nearest neighbor interpolation
+            for idx in invalid_indices:
+                # Find nearest valid pixel (circular)
+                distances = np.minimum(
+                    np.abs(valid_indices - idx),
+                    n_azimuth - np.abs(valid_indices - idx)
+                )
+                nearest_valid = valid_indices[np.argmin(distances)]
+                result[row, idx] = row_data[nearest_valid]
+
+    # Handle completely empty rows by copying from nearest non-empty row
+    for row in range(n_elevation):
+        if not np.any(result[row] > 0):
+            # Find nearest non-empty row
+            for offset in range(1, n_elevation):
+                if row - offset >= 0 and np.any(result[row - offset] > 0):
+                    result[row] = result[row - offset]
+                    break
+                if row + offset < n_elevation and np.any(result[row + offset] > 0):
+                    result[row] = result[row + offset]
+                    break
+
+    return result
 
 
 class RangeImageProjector:
@@ -69,9 +147,19 @@ class RangeImageProjector:
         y = points[:, 1]
         z = points[:, 2]
 
-        # Compute spherical coordinates
-        # Range
-        range_vals = np.sqrt(x**2 + y**2 + z**2)
+        # Filter invalid coordinates first (NaN, Inf)
+        valid_coords = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
+        x = x[valid_coords]
+        y = y[valid_coords]
+        z = z[valid_coords]
+        points = points[valid_coords]
+
+        # Compute spherical coordinates with overflow protection
+        # Range - use clipping to prevent overflow
+        x_sq = np.clip(x**2, 0, 1e10)
+        y_sq = np.clip(y**2, 0, 1e10)
+        z_sq = np.clip(z**2, 0, 1e10)
+        range_vals = np.sqrt(x_sq + y_sq + z_sq)
 
         # Azimuth: angle in xy-plane from +x axis
         # Map from [-pi, pi] to [0, 2*pi] for easier binning
@@ -79,10 +167,11 @@ class RangeImageProjector:
         azimuth = (azimuth + np.pi) % (2 * np.pi)  # [0, 2*pi]
 
         # Elevation: angle from xy-plane
-        elevation = np.arctan2(z, np.sqrt(x**2 + y**2))
+        xy_range = np.sqrt(x_sq + y_sq)
+        elevation = np.arctan2(z, xy_range)
 
         # Filter points by range
-        valid_mask = (range_vals >= self.min_range) & (range_vals <= self.max_range)
+        valid_mask = (range_vals >= self.min_range) & (range_vals <= self.max_range) & np.isfinite(range_vals)
         range_vals = range_vals[valid_mask]
         azimuth = azimuth[valid_mask]
         elevation = elevation[valid_mask]
@@ -108,30 +197,37 @@ class RangeImageProjector:
             self.n_azimuth - 1
         )
 
-        # Initialize images
-        range_image = np.zeros((self.n_elevation, self.n_azimuth), dtype=np.float32)
-        if keep_intensity and intensity is not None:
-            intensity_image = np.zeros((self.n_elevation, self.n_azimuth), dtype=np.float32)
-        else:
-            intensity_image = None
+        # Vectorized range image filling using np.minimum.at
+        # Convert 2D indices to linear indices for vectorized operation
+        linear_idx = elev_bins * self.n_azimuth + azim_bins
 
-        # Fill range image
-        # For overlapping points, keep the closest (smallest range)
-        range_image.fill(np.inf)
+        # Initialize flat array with inf
+        flat_range = np.full(self.n_elevation * self.n_azimuth, np.inf, dtype=np.float32)
 
-        for i in range(len(range_vals)):
-            row = elev_bins[i]
-            col = azim_bins[i]
+        # Use minimum.at for keeping closest point at each pixel (vectorized)
+        np.minimum.at(flat_range, linear_idx, range_vals)
 
-            # Keep closest point
-            if range_vals[i] < range_image[row, col]:
-                range_image[row, col] = range_vals[i]
-
-                if intensity_image is not None:
-                    intensity_image[row, col] = intensity[i]
+        # Reshape to 2D image
+        range_image = flat_range.reshape(self.n_elevation, self.n_azimuth)
 
         # Replace inf with 0 for empty cells
         range_image[range_image == np.inf] = 0.0
+
+        # Handle intensity image if needed
+        if keep_intensity and intensity is not None:
+            # For intensity, we need to get the intensity of the closest point
+            # Find which points are the closest at each pixel
+            flat_intensity = np.zeros(self.n_elevation * self.n_azimuth, dtype=np.float32)
+
+            # Create mask for points that are the closest at their pixel
+            closest_mask = (range_vals == flat_range[linear_idx])
+
+            # Use maximum.at to handle multiple closest points (take any one)
+            np.maximum.at(flat_intensity, linear_idx[closest_mask], intensity[closest_mask])
+
+            intensity_image = flat_intensity.reshape(self.n_elevation, self.n_azimuth)
+        else:
+            intensity_image = None
 
         return range_image, intensity_image
 

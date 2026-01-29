@@ -4,9 +4,9 @@ GNN Model - Algorithm 3
 3-layer Graph Attention Network (GAT) for trajectory context injection.
 
 Architecture:
-- Input: 50D spectral histograms
+- Input: Per-elevation spectral histograms (default 800D = 16 elevations × 50 bins)
 - 3× GATConv layers with residual connections
-- Output: 50D enhanced embeddings
+- Output: Enhanced embeddings (same dimension as input)
 - Dot-product attention mechanism
 """
 
@@ -24,29 +24,33 @@ class SpectralGNN(nn.Module):
 
     Uses Graph Attention Networks to inject trajectory context into
     spectral histograms via temporal graph propagation.
+
+    Architecture: Input(800) → Proj(256) → GAT×3(256) → Proj(800) → Output(800)
     """
 
     def __init__(
         self,
-        input_dim: int = 50,
-        hidden_dim: int = 50,
-        output_dim: int = 50,
+        input_dim: int = 800,
+        hidden_dim: int = 256,  # Reduced for memory efficiency
+        output_dim: int = 800,
         n_layers: int = 3,
         n_heads: int = 1,
         dropout: float = 0.1,
-        residual: bool = True
+        residual: bool = True,
+        edge_dim: int = None
     ):
         """
         Initialize GNN model
 
         Args:
-            input_dim: Input feature dimension (50 for histogram)
-            hidden_dim: Hidden layer dimension (50)
-            output_dim: Output embedding dimension (50)
+            input_dim: Input feature dimension (800 for per-elevation histogram: 16 × 50)
+            hidden_dim: Hidden layer dimension (256 for memory efficiency)
+            output_dim: Output embedding dimension (800)
             n_layers: Number of GATConv layers (3)
             n_heads: Number of attention heads (1 for dot-product)
             dropout: Dropout rate
             residual: Use residual connections
+            edge_dim: Edge feature dimension (None = no edge features, 2 = distance + rotation)
         """
         super().__init__()
 
@@ -57,49 +61,33 @@ class SpectralGNN(nn.Module):
         self.n_heads = n_heads
         self.dropout = dropout
         self.residual = residual
+        self.edge_dim = edge_dim
 
-        # Build GATConv layers
+        # Input projection: 800 -> 256
+        self.input_proj = nn.Linear(input_dim, hidden_dim)
+        self.input_norm = nn.BatchNorm1d(hidden_dim)
+
+        # Build GATConv layers (all in hidden_dim)
         self.convs = nn.ModuleList()
         self.batch_norms = nn.ModuleList()
 
-        # First layer
-        self.convs.append(
-            GATConv(
-                input_dim,
-                hidden_dim,
-                heads=n_heads,
-                concat=False,  # Average multi-head outputs
-                dropout=dropout
-            )
-        )
-        self.batch_norms.append(nn.BatchNorm1d(hidden_dim))
-
-        # Hidden layers
-        for _ in range(n_layers - 2):
+        for _ in range(n_layers):
             self.convs.append(
                 GATConv(
                     hidden_dim,
                     hidden_dim,
                     heads=n_heads,
                     concat=False,
-                    dropout=dropout
+                    dropout=dropout,
+                    edge_dim=edge_dim
                 )
             )
             self.batch_norms.append(nn.BatchNorm1d(hidden_dim))
 
-        # Output layer
-        self.convs.append(
-            GATConv(
-                hidden_dim,
-                output_dim,
-                heads=n_heads,
-                concat=False,
-                dropout=dropout
-            )
-        )
-        self.batch_norms.append(nn.BatchNorm1d(output_dim))
+        # Output projection: 256 -> 800
+        self.output_proj = nn.Linear(hidden_dim, output_dim)
 
-        # Residual projection (if dimensions differ)
+        # Residual projection (input to output)
         if residual and input_dim != output_dim:
             self.residual_proj = nn.Linear(input_dim, output_dim)
         else:
@@ -113,22 +101,32 @@ class SpectralGNN(nn.Module):
             data: PyG Data object with:
                 - x: (n_nodes, input_dim) node features
                 - edge_index: (2, n_edges) edge connectivity
+                - edge_attr: (n_edges, edge_dim) edge features (optional)
 
         Returns:
             (n_nodes, output_dim) enhanced embeddings
         """
         x, edge_index = data.x, data.edge_index
+        edge_attr = getattr(data, 'edge_attr', None)
 
         # Store input for residual
         x_input = x
 
-        # Pass through layers
+        # Input projection: 800 -> 256
+        x = self.input_proj(x)
+        x = self.input_norm(x)
+        x = F.relu(x)
+
+        # Pass through GAT layers (all in hidden_dim=256)
         for i, (conv, bn) in enumerate(zip(self.convs, self.batch_norms)):
             # Store for residual connection
             x_prev = x
 
-            # GATConv
-            x = conv(x, edge_index)
+            # GATConv with optional edge attributes
+            if edge_attr is not None and self.edge_dim is not None:
+                x = conv(x, edge_index, edge_attr=edge_attr)
+            else:
+                x = conv(x, edge_index)
 
             # Batch normalization
             x = bn(x)
@@ -141,6 +139,9 @@ class SpectralGNN(nn.Module):
             # Residual connection (for middle layers)
             if self.residual and i > 0 and i < len(self.convs) - 1:
                 x = x + x_prev
+
+        # Output projection: 256 -> 800
+        x = self.output_proj(x)
 
         # Final residual connection from input to output
         if self.residual:
@@ -165,6 +166,11 @@ class SpectralGNN(nn.Module):
         x, edge_index = data.x, data.edge_index
         x_input = x
 
+        # Input projection
+        x = self.input_proj(x)
+        x = self.input_norm(x)
+        x = F.relu(x)
+
         attention_weights = []
 
         for i, (conv, bn) in enumerate(zip(self.convs, self.batch_norms)):
@@ -182,6 +188,9 @@ class SpectralGNN(nn.Module):
 
             if self.residual and i > 0 and i < len(self.convs) - 1:
                 x = x + x_prev
+
+        # Output projection
+        x = self.output_proj(x)
 
         if self.residual:
             if self.residual_proj is not None:
@@ -273,25 +282,27 @@ class LocalUpdateGNN(nn.Module):
 
 
 def create_spectral_gnn(
-    input_dim: int = 50,
-    hidden_dim: int = 50,
-    output_dim: int = 50,
+    input_dim: int = 800,
+    hidden_dim: int = 256,  # Reduced for memory efficiency
+    output_dim: int = 800,
     n_layers: int = 3,
     dropout: float = 0.1,
     use_local_updates: bool = True,
-    local_update_hops: int = 3
+    local_update_hops: int = 3,
+    edge_dim: int = None
 ) -> nn.Module:
     """
     Factory function to create GNN model
 
     Args:
-        input_dim: Input dimension
+        input_dim: Input dimension (800 = 16 elevations × 50 bins)
         hidden_dim: Hidden dimension
         output_dim: Output dimension
         n_layers: Number of layers
         dropout: Dropout rate
         use_local_updates: Enable local update wrapper
         local_update_hops: Number of hops for local updates
+        edge_dim: Edge feature dimension (None = no edge features, 1 = distance)
 
     Returns:
         GNN model (LocalUpdateGNN or SpectralGNN)
@@ -303,7 +314,8 @@ def create_spectral_gnn(
         n_layers=n_layers,
         n_heads=1,  # Dot-product attention
         dropout=dropout,
-        residual=True
+        residual=True,
+        edge_dim=edge_dim
     )
 
     if use_local_updates:
@@ -317,7 +329,7 @@ def test_gnn_forward():
     # Create dummy graph
     n_nodes = 10
     n_edges = 20
-    feature_dim = 50
+    feature_dim = 800  # 16 elevations × 50 bins
 
     x = torch.randn(n_nodes, feature_dim)
     edge_index = torch.randint(0, n_nodes, (2, n_edges))

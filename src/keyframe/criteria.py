@@ -164,7 +164,7 @@ class KeyframeSelectionCriteria:
         require_all: bool = False
     ) -> Tuple[bool, dict]:
         """
-        Determine if current scan should be a keyframe
+        Determine if current scan should be a keyframe (optimized with early termination)
 
         Args:
             pose_current: (4, 4) current pose
@@ -181,7 +181,7 @@ class KeyframeSelectionCriteria:
         """
         details = {}
 
-        # Check distance
+        # Check distance (fast)
         dist_satisfied, dist_value = self.check_distance(pose_current, pose_last)
         details['distance'] = {
             'satisfied': dist_satisfied,
@@ -189,7 +189,7 @@ class KeyframeSelectionCriteria:
             'threshold': self.distance_threshold
         }
 
-        # Check rotation
+        # Check rotation (fast)
         rot_satisfied, rot_value = self.check_rotation(pose_current, pose_last)
         details['rotation'] = {
             'satisfied': rot_satisfied,
@@ -197,7 +197,7 @@ class KeyframeSelectionCriteria:
             'threshold': self.rotation_threshold
         }
 
-        # Check temporal
+        # Check temporal (fast)
         temp_satisfied, temp_value = self.check_temporal(timestamp_current, timestamp_last)
         details['temporal'] = {
             'satisfied': temp_satisfied,
@@ -205,7 +205,18 @@ class KeyframeSelectionCriteria:
             'threshold': self.temporal_threshold
         }
 
-        # Check geometric novelty (if point clouds provided)
+        # Early termination for OR logic: skip expensive geometric check if already selected
+        if not require_all and (dist_satisfied or rot_satisfied or temp_satisfied):
+            details['geometric'] = {
+                'satisfied': None,
+                'value': None,
+                'threshold': self.overlap_threshold,
+                'note': 'Skipped (early termination)'
+            }
+            details['selected'] = True
+            return True, details
+
+        # Check geometric novelty only if needed (expensive operation)
         if points_current is not None and points_last is not None:
             geom_satisfied, overlap_value = self.check_geometric_novelty(
                 points_current, points_last, pose_current, pose_last
@@ -226,19 +237,12 @@ class KeyframeSelectionCriteria:
 
         # Determine selection
         if require_all:
-            # All criteria must be satisfied
             criteria_satisfied = [dist_satisfied, rot_satisfied, temp_satisfied]
             if points_current is not None and points_last is not None:
                 criteria_satisfied.append(geom_satisfied)
-
             selected = all(criteria_satisfied)
         else:
-            # Any criterion is sufficient (OR logic)
-            selected = dist_satisfied or rot_satisfied or temp_satisfied
-
-            # Geometric novelty is an additional check if available
-            if points_current is not None and points_last is not None:
-                selected = selected or geom_satisfied
+            selected = geom_satisfied  # Only geometric left to check
 
         details['selected'] = selected
 

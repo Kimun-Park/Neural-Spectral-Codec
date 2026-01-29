@@ -16,17 +16,24 @@ This mining strategy is critical for learning discriminative embeddings.
 
 import numpy as np
 import torch
+import logging
+import time
 from typing import List, Tuple, Optional
+from scipy.spatial import cKDTree
 from data.pose_utils import euclidean_distance
 from retrieval.wasserstein import wasserstein_distance_1d_numpy
 
 
 class TripletMiner:
     """
-    Mines triplets (anchor, positive, negative) for training
+    Mines triplets (anchor, positive, negative) for training.
 
-    Uses geometric constraints and Wasserstein distance to select
-    hard negatives that are confusing but geometrically distinct.
+    Loop Closure Mining Strategy:
+    - Positive: Same location (< 5m) but different time (>= skip_frames apart)
+    - Negative: Different location (10-50m) AND different time (>= skip_frames apart)
+
+    This ensures the model learns to recognize places across time,
+    not just temporal similarity.
     """
 
     def __init__(
@@ -35,37 +42,42 @@ class TripletMiner:
         positive_temporal_min: int = 30,
         negative_distance_min: float = 10.0,
         negative_distance_max: float = 50.0,
+        negative_temporal_min: int = 30,
         mining_strategy: str = "hard"
     ):
         """
-        Initialize triplet miner
+        Initialize triplet miner for loop closure learning.
 
         Args:
             positive_distance_max: Max distance for positive pairs (meters)
-            positive_temporal_min: Min temporal gap for positives (frames)
+            positive_temporal_min: Min temporal gap for positives (keyframes)
             negative_distance_min: Min distance for negatives (meters)
             negative_distance_max: Max distance for negatives (meters)
+            negative_temporal_min: Min temporal gap for negatives (keyframes)
             mining_strategy: Mining strategy (hard, semi-hard, random)
         """
         self.positive_distance_max = positive_distance_max
         self.positive_temporal_min = positive_temporal_min
         self.negative_distance_min = negative_distance_min
         self.negative_distance_max = negative_distance_max
+        self.negative_temporal_min = negative_temporal_min
         self.mining_strategy = mining_strategy
 
     def mine_triplets(
         self,
         descriptors: np.ndarray,
         poses: np.ndarray,
-        n_triplets_per_anchor: int = 1
+        n_triplets_per_anchor: int = 1,
+        sequence_ids: np.ndarray = None
     ) -> List[Tuple[int, int, int]]:
         """
-        Mine triplets from keyframe data
+        Mine triplets from keyframe data (per-sequence to avoid cross-sequence pairs)
 
         Args:
             descriptors: (n_keyframes, n_bins) spectral histograms
             poses: (n_keyframes, 4, 4) SE(3) poses
             n_triplets_per_anchor: Number of triplets per anchor
+            sequence_ids: (n_keyframes,) sequence ID for each keyframe (optional)
 
         Returns:
             List of (anchor_idx, positive_idx, negative_idx) tuples
@@ -73,39 +85,145 @@ class TripletMiner:
         n_keyframes = len(descriptors)
         triplets = []
 
+        # If sequence_ids provided, mine per sequence (much faster)
+        if sequence_ids is not None:
+            unique_seqs = np.unique(sequence_ids)
+            logging.info(f"Mining triplets per sequence ({len(unique_seqs)} sequences)...")
+
+            for seq_idx, seq_id in enumerate(unique_seqs):
+                seq_start = time.perf_counter()
+                seq_mask = sequence_ids == seq_id
+                seq_indices = np.where(seq_mask)[0]
+
+                if len(seq_indices) < 3:
+                    continue
+
+                # Mine within this sequence
+                seq_triplets = self._mine_sequence_triplets(
+                    seq_indices, descriptors, poses, n_triplets_per_anchor
+                )
+                triplets.extend(seq_triplets)
+                seq_time = time.perf_counter() - seq_start
+
+                logging.info(
+                    f"  Seq {seq_idx+1}/{len(unique_seqs)} (id={seq_id}): "
+                    f"{len(seq_indices):,} keyframes -> {len(seq_triplets):,} triplets "
+                    f"({seq_time:.1f}s, {len(seq_triplets)/seq_time:.0f}/s)"
+                )
+
+            return triplets
+
+        # Original O(n²) approach if no sequence_ids
         for anchor_idx in range(n_keyframes):
-            # Find positive candidates
             positive_candidates = self._find_positive_candidates(
-                anchor_idx,
-                poses,
-                n_keyframes
+                anchor_idx, poses, n_keyframes
             )
 
             if len(positive_candidates) == 0:
-                continue  # No valid positives for this anchor
+                continue
 
-            # Find negative candidates
             negative_candidates = self._find_negative_candidates(
-                anchor_idx,
-                poses,
-                n_keyframes
+                anchor_idx, poses, n_keyframes
             )
 
             if len(negative_candidates) == 0:
-                continue  # No valid negatives for this anchor
+                continue
 
-            # Mine triplets for this anchor
             for _ in range(n_triplets_per_anchor):
-                # Select positive (random from candidates)
                 positive_idx = np.random.choice(positive_candidates)
-
-                # Select hard negative
                 negative_idx = self._select_hard_negative(
-                    anchor_idx,
-                    negative_candidates,
-                    descriptors
+                    anchor_idx, negative_candidates, descriptors
                 )
+                triplets.append((anchor_idx, positive_idx, negative_idx))
 
+        return triplets
+
+    def _mine_sequence_triplets(
+        self,
+        seq_indices: np.ndarray,
+        descriptors: np.ndarray,
+        poses: np.ndarray,
+        n_triplets_per_anchor: int
+    ) -> List[Tuple[int, int, int]]:
+        """
+        Mine triplets within a single sequence using KD-Tree (O(n log n) instead of O(n²)).
+
+        Loop Closure Mining:
+        - Positive: distance < 5m AND temporal_gap >= 30 (same place, different time)
+        - Negative: 10m < distance < 50m AND temporal_gap >= 30 (different place, different time)
+
+        This ensures the model learns place recognition across time,
+        excluding temporal neighbors from both positives and negatives.
+        """
+        triplets = []
+        n_seq = len(seq_indices)
+
+        # Extract positions from poses (translation component)
+        seq_positions = np.array([
+            poses[idx][:3, 3] for idx in seq_indices
+        ])  # (n_seq, 3)
+
+        # Build KD-Tree for fast spatial queries - O(n log n)
+        tree = cKDTree(seq_positions)
+
+        # Statistics
+        n_anchors_with_positives = 0
+        n_anchors_with_negatives = 0
+
+        for local_anchor in range(n_seq):
+            anchor_idx = seq_indices[local_anchor]
+            anchor_pos = seq_positions[local_anchor]
+
+            # Query positives: within positive_distance_max - O(log n)
+            positive_local_indices = tree.query_ball_point(
+                anchor_pos, r=self.positive_distance_max
+            )
+
+            # Query negatives: within negative_distance_max - O(log n)
+            neg_outer_indices = tree.query_ball_point(
+                anchor_pos, r=self.negative_distance_max
+            )
+            neg_inner_indices = set(tree.query_ball_point(
+                anchor_pos, r=self.negative_distance_min
+            ))
+
+            # Filter positives by temporal gap (loop closure constraint)
+            positive_candidates = []
+            for local_other in positive_local_indices:
+                if local_other == local_anchor:
+                    continue
+                temporal_gap = abs(local_other - local_anchor)
+                if temporal_gap >= self.positive_temporal_min:
+                    positive_candidates.append(seq_indices[local_other])
+
+            # Filter negatives:
+            # 1. In outer ring (between min and max distance)
+            # 2. NOT temporal neighbors (temporal_gap >= negative_temporal_min)
+            negative_candidates = []
+            for local_other in neg_outer_indices:
+                if local_other == local_anchor:
+                    continue
+                # Spatial constraint: in 10-50m ring
+                if local_other in neg_inner_indices:
+                    continue
+                # Temporal constraint: not a temporal neighbor
+                temporal_gap = abs(local_other - local_anchor)
+                if temporal_gap >= self.negative_temporal_min:
+                    negative_candidates.append(seq_indices[local_other])
+
+            if len(positive_candidates) > 0:
+                n_anchors_with_positives += 1
+            if len(negative_candidates) > 0:
+                n_anchors_with_negatives += 1
+
+            if len(positive_candidates) == 0 or len(negative_candidates) == 0:
+                continue
+
+            for _ in range(n_triplets_per_anchor):
+                positive_idx = np.random.choice(positive_candidates)
+                negative_idx = self._select_hard_negative(
+                    anchor_idx, negative_candidates, descriptors
+                )
                 triplets.append((anchor_idx, positive_idx, negative_idx))
 
         return triplets
@@ -158,10 +276,11 @@ class TripletMiner:
         n_keyframes: int
     ) -> List[int]:
         """
-        Find negative candidates for anchor
+        Find negative candidates for anchor (loop closure style).
 
         Criteria:
-        - 10m < distance < 50m
+        - 10m < distance < 50m (different location)
+        - temporal_gap >= negative_temporal_min (not a temporal neighbor)
 
         Args:
             anchor_idx: Anchor index
@@ -177,6 +296,11 @@ class TripletMiner:
 
         for i in range(n_keyframes):
             if i == anchor_idx:
+                continue
+
+            # Check temporal gap (exclude temporal neighbors)
+            temporal_gap = abs(i - anchor_idx)
+            if temporal_gap < self.negative_temporal_min:
                 continue
 
             # Check spatial distance
@@ -390,25 +514,28 @@ def create_triplet_miner(
     positive_temporal_min: int = 30,
     negative_distance_min: float = 10.0,
     negative_distance_max: float = 50.0,
+    negative_temporal_min: int = 30,
     mining_strategy: str = "hard"
 ) -> TripletMiner:
     """
-    Factory function to create triplet miner
+    Factory function to create triplet miner for loop closure learning.
 
     Args:
         positive_distance_max: Max distance for positives (meters)
-        positive_temporal_min: Min temporal gap for positives (frames)
+        positive_temporal_min: Min temporal gap for positives (keyframes)
         negative_distance_min: Min distance for negatives (meters)
         negative_distance_max: Max distance for negatives (meters)
-        mining_strategy: Mining strategy
+        negative_temporal_min: Min temporal gap for negatives (keyframes)
+        mining_strategy: Mining strategy (hard, semi-hard, random)
 
     Returns:
-        TripletMiner instance
+        TripletMiner instance configured for loop closure learning
     """
     return TripletMiner(
         positive_distance_max=positive_distance_max,
         positive_temporal_min=positive_temporal_min,
         negative_distance_min=negative_distance_min,
         negative_distance_max=negative_distance_max,
+        negative_temporal_min=negative_temporal_min,
         mining_strategy=mining_strategy
     )

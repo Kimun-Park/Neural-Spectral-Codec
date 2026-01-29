@@ -324,33 +324,66 @@ def compute_overlap(
     points1: np.ndarray,
     points2: np.ndarray,
     T_12: np.ndarray,
-    voxel_size: float = 0.2
+    voxel_size: float = 0.2,
+    max_points: int = 5000
 ) -> float:
     """
-    Compute geometric overlap between two point clouds
+    Compute geometric overlap between two point clouds (optimized)
 
     Args:
         points1: (N, 3) first point cloud
         points2: (M, 3) second point cloud
         T_12: (4, 4) transformation from cloud1 to cloud2
         voxel_size: Voxel size for overlap computation
+        max_points: Maximum points to use (downsampling for speed)
 
     Returns:
         IoU (Intersection over Union) ratio
     """
+    # Downsample for speed (20x faster with 5000 vs 100000 points)
+    if len(points1) > max_points:
+        idx1 = np.random.choice(len(points1), max_points, replace=False)
+        points1 = points1[idx1]
+
+    if len(points2) > max_points:
+        idx2 = np.random.choice(len(points2), max_points, replace=False)
+        points2 = points2[idx2]
+
     # Transform points1 to frame of points2
     points1_transformed = transform_points(points1, T_12)
 
-    # Voxelize both clouds
-    def voxelize(points, voxel_size):
-        voxel_coords = np.floor(points / voxel_size).astype(int)
-        return set(map(tuple, voxel_coords))
+    # Voxelize both clouds using numpy (faster than set for large arrays)
+    def voxelize_fast(points, voxel_size):
+        # Filter invalid points
+        valid_mask = np.isfinite(points).all(axis=1)
+        points = points[valid_mask]
 
-    voxels1 = voxelize(points1_transformed, voxel_size)
-    voxels2 = voxelize(points2, voxel_size)
+        if len(points) == 0:
+            # Return empty structured array
+            dtype = [('x', np.int32), ('y', np.int32), ('z', np.int32)]
+            return np.array([], dtype=dtype)
+
+        # Clip values to prevent overflow
+        points = np.clip(points, -1e6, 1e6)
+
+        voxel_coords = np.floor(points / voxel_size).astype(np.int32)
+        # Use structured array for fast unique
+        dtype = [('x', np.int32), ('y', np.int32), ('z', np.int32)]
+        voxels = np.empty(len(voxel_coords), dtype=dtype)
+        voxels['x'] = voxel_coords[:, 0]
+        voxels['y'] = voxel_coords[:, 1]
+        voxels['z'] = voxel_coords[:, 2]
+        return np.unique(voxels)
+
+    voxels1 = voxelize_fast(points1_transformed, voxel_size)
+    voxels2 = voxelize_fast(points2, voxel_size)
+
+    # Convert to sets for IoU (only after unique, much smaller)
+    set1 = set(map(tuple, [(v['x'], v['y'], v['z']) for v in voxels1]))
+    set2 = set(map(tuple, [(v['x'], v['y'], v['z']) for v in voxels2]))
 
     # Compute IoU
-    intersection = len(voxels1 & voxels2)
-    union = len(voxels1 | voxels2)
+    intersection = len(set1 & set2)
+    union = len(set1 | set2)
 
     return intersection / union if union > 0 else 0.0
