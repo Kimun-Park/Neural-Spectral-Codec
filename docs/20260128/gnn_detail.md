@@ -20,17 +20,27 @@
 
 ---
 
-## 2. Temporal Graph Construction
+## 2. Hybrid Graph Construction (Temporal + Spatial)
 
 ### 2.1 그래프 구조
 
-각 keyframe이 하나의 노드이며, 시간순으로 인접한 $k$개 이웃과 연결됩니다.
+각 keyframe이 하나의 노드이며, 두 종류의 edge로 연결됩니다:
 
 $$V = \{v_1, v_2, ..., v_N\}, \quad x_i \in \mathbb{R}^{800}$$
 
-$$\mathcal{N}(i) = \{j : |i - j| \leq k\}$$
+**Temporal edges (항상):**
+$$\mathcal{N}_{temp}(i) = \{j : |i - j| \leq k\}$$
 
-기본 $k = 2$ (이전 2프레임 + 이후 2프레임, 총 4개 이웃)
+**Loop closure edges (검증 후):**
+$$\mathcal{N}_{loop}(i) = \{j : (i, j) \in \text{VerifiedLoops}\}$$
+
+**전체 이웃:**
+$$\mathcal{N}(i) = \mathcal{N}_{temp}(i) \cup \mathcal{N}_{loop}(i)$$
+
+| Edge Type | 조건 | 역할 |
+|-----------|------|------|
+| Temporal | 시간적 인접 | Trajectory context |
+| Loop Closure | 기하 검증 통과 | Spatial context |
 
 ### 2.2 Edge Features
 

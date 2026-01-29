@@ -1,12 +1,17 @@
 """
-Graph Manager for Temporal Keyframe Graph
+Graph Manager for Hybrid Keyframe Graph (Temporal + Spatial)
 
 Manages PyTorch Geometric graph structure with:
 - Node features: 800D per-elevation spectral histograms (16 elevations × 50 bins)
-- Temporal edges (M=5 nearest neighbors)
+- Temporal edges: Connect temporally adjacent keyframes (k-hop neighbors)
+- Loop closure edges: Connect verified loop closure pairs (spatial)
+- Edge features: 2D (normalized distance + rotation)
 - Sliding window (max 1000 active nodes)
 - Local updates (3-hop neighborhoods)
-- Efficient graph lifecycle management
+
+Graph Structure:
+    Temporal: t-2 ← t-1 ← t → t+1 → t+2 (always)
+    Spatial:  query ←→ match (after verification)
 """
 
 import numpy as np
@@ -199,6 +204,72 @@ class TemporalGraphManager:
     def get_graph(self) -> Optional[Data]:
         """Get current active graph"""
         return self.graph
+
+    def add_loop_closure_edge(
+        self,
+        query_keyframe_id: int,
+        match_keyframe_id: int,
+        pose_query: np.ndarray = None,
+        pose_match: np.ndarray = None
+    ) -> bool:
+        """
+        Add verified loop closure edge to graph (bidirectional).
+
+        Called after geometric verification confirms a loop closure.
+        This connects spatially related keyframes that may be temporally distant.
+
+        Args:
+            query_keyframe_id: Query keyframe ID
+            match_keyframe_id: Matched keyframe ID
+            pose_query: Optional (4, 4) SE(3) pose of query
+            pose_match: Optional (4, 4) SE(3) pose of match
+
+        Returns:
+            True if edge was added, False if keyframes not in active graph
+        """
+        query_idx = self.keyframe_id_to_node_idx.get(query_keyframe_id)
+        match_idx = self.keyframe_id_to_node_idx.get(match_keyframe_id)
+
+        if query_idx is None or match_idx is None:
+            return False
+
+        if self.graph is None:
+            return False
+
+        # Create new edges (bidirectional)
+        new_edges = torch.tensor(
+            [[query_idx, match_idx], [match_idx, query_idx]],
+            dtype=torch.long,
+            device=self.device
+        ).t()
+
+        # Compute edge features if poses available
+        new_edge_attr = None
+        if pose_query is not None and pose_match is not None and self.graph.edge_attr is not None:
+            # Distance
+            dist = np.linalg.norm(pose_query[:3, 3] - pose_match[:3, 3])
+            norm_dist = np.log1p(dist) / 5.0
+
+            # Rotation
+            R_rel = pose_match[:3, :3] @ pose_query[:3, :3].T
+            trace_val = np.clip(np.trace(R_rel), -1.0, 3.0)
+            angle_rad = np.arccos(np.clip((trace_val - 1.0) / 2.0, -1.0, 1.0))
+            norm_rot = angle_rad / np.pi
+
+            # Create edge attr for both directions
+            new_edge_attr = torch.tensor(
+                [[norm_dist, norm_rot], [norm_dist, norm_rot]],
+                dtype=torch.float32,
+                device=self.device
+            )
+
+        # Append to existing edges
+        self.graph.edge_index = torch.cat([self.graph.edge_index, new_edges], dim=1)
+
+        if new_edge_attr is not None and self.graph.edge_attr is not None:
+            self.graph.edge_attr = torch.cat([self.graph.edge_attr, new_edge_attr], dim=0)
+
+        return True
 
     def get_node_index(self, keyframe_id: int) -> Optional[int]:
         """
@@ -401,7 +472,8 @@ def build_graph_from_keyframes_batch(
     keyframes: List[Keyframe],
     temporal_neighbors: int = 5,
     device: str = 'cpu',
-    poses: np.ndarray = None
+    poses: np.ndarray = None,
+    loop_closures: List[Tuple[int, int]] = None
 ) -> Data:
     """
     O(n) batch graph construction for offline training.
@@ -409,14 +481,19 @@ def build_graph_from_keyframes_batch(
     Builds graph in single pass instead of n incremental rebuilds.
     Significantly faster than build_graph_from_keyframes for large datasets.
 
+    Graph structure:
+    - Temporal edges: Connect temporally adjacent keyframes (k-hop neighbors)
+    - Loop closure edges: Connect verified loop closure pairs (spatial)
+
     Args:
         keyframes: List of keyframes with descriptors
         temporal_neighbors: Number of temporal neighbors (M=5)
         device: Device for tensors ('cuda' or 'cpu')
         poses: Optional (n_keyframes, 4, 4) SE(3) poses for edge distance computation
+        loop_closures: Optional list of (query_idx, match_idx) verified loop closure pairs
 
     Returns:
-        PyG Data object with features, temporal edges, and edge_attr (distances)
+        PyG Data object with features, temporal edges, loop edges, and edge_attr
 
     Performance:
         - O(n) complexity vs O(n²) for incremental version
@@ -471,6 +548,29 @@ def build_graph_from_keyframes_batch(
                     trace_val = np.clip(np.trace(R_rel), -1.0, 3.0)
                     angle_rad = np.arccos(np.clip((trace_val - 1.0) / 2.0, -1.0, 1.0))
                     edge_rotations.append(angle_rad)
+
+    # 2.5. Add verified loop closure edges (bidirectional)
+    if loop_closures is not None and len(loop_closures) > 0:
+        for query_idx, match_idx in loop_closures:
+            if 0 <= query_idx < n_nodes and 0 <= match_idx < n_nodes:
+                # Add bidirectional edges
+                edges.append([query_idx, match_idx])
+                edges.append([match_idx, query_idx])
+
+                # Compute edge features if poses available
+                if poses is not None:
+                    for _ in range(2):  # Two edges (bidirectional)
+                        pos_i = poses[query_idx, :3, 3]
+                        pos_j = poses[match_idx, :3, 3]
+                        dist = np.linalg.norm(pos_i - pos_j)
+                        edge_distances.append(dist)
+
+                        R_i = poses[query_idx, :3, :3]
+                        R_j = poses[match_idx, :3, :3]
+                        R_rel = R_j @ R_i.T
+                        trace_val = np.clip(np.trace(R_rel), -1.0, 3.0)
+                        angle_rad = np.arccos(np.clip((trace_val - 1.0) / 2.0, -1.0, 1.0))
+                        edge_rotations.append(angle_rad)
 
     # Convert to tensor
     if len(edges) > 0:
