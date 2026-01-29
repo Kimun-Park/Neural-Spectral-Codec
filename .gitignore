@@ -38,3 +38,6 @@ Thumbs.db
 *.tmp
 *.temp
 .claude/
+
+# Project-specific
+CLAUDE.md
