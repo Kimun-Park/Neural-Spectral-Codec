@@ -13,6 +13,8 @@ build/
 logs/
 outputs/
 checkpoints/
+**/checkpoints/
+**/checkpoints_v2/
 docs/
 *.pth
 *.pt
